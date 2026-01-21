@@ -6,3 +6,4 @@ python-dotenv
 sqlalchemy
 alembic
 python-multipart
+psycopg2-binary

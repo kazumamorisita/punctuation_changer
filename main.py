@@ -718,6 +718,103 @@ def recreate_database():
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+@app.get("/api/admin/backup")
+def backup_database(db: Session = Depends(get_db)):
+    """データベースの全データをJSONでエクスポート（緊急時のバックアップ用）"""
+    try:
+        users = db.query(User).all()
+        subscriptions = db.query(Subscription).all()
+        
+        backup_data = {
+            "backup_date": datetime.utcnow().isoformat(),
+            "users": [
+                {
+                    "id": user.id,
+                    "user_key": user.user_key,
+                    "email": user.email,
+                    "created_at": user.created_at.isoformat() if user.created_at else None,
+                    "daily_usage_count": user.daily_usage_count,
+                    "daily_usage_date": user.daily_usage_date,
+                    "is_premium": user.is_premium,
+                    "browser_fingerprint": getattr(user, 'browser_fingerprint', None),
+                    "last_ip": getattr(user, 'last_ip', None),
+                    "last_user_agent": getattr(user, 'last_user_agent', None)
+                } for user in users
+            ],
+            "subscriptions": [
+                {
+                    "id": sub.id,
+                    "user_key": sub.user_key,
+                    "stripe_customer_id": sub.stripe_customer_id,
+                    "stripe_subscription_id": sub.stripe_subscription_id,
+                    "is_active": sub.is_active,
+                    "created_at": sub.created_at.isoformat() if sub.created_at else None,
+                    "browser_fingerprint": getattr(sub, 'browser_fingerprint', None),
+                    "payment_ip": getattr(sub, 'payment_ip', None)
+                } for sub in subscriptions
+            ]
+        }
+        
+        return backup_data
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/admin/restore")
+async def restore_database(request: Request, db: Session = Depends(get_db)):
+    """バックアップデータからデータベースを復元"""
+    try:
+        backup_data = await request.json()
+        
+        # 既存データをクリア
+        db.query(Subscription).delete()
+        db.query(User).delete()
+        
+        # ユーザーデータを復元
+        for user_data in backup_data.get("users", []):
+            user = User(
+                user_key=user_data["user_key"],
+                email=user_data.get("email"),
+                daily_usage_count=user_data.get("daily_usage_count", 0),
+                daily_usage_date=user_data.get("daily_usage_date"),
+                is_premium=user_data.get("is_premium", False)
+            )
+            if hasattr(User, 'browser_fingerprint') and user_data.get("browser_fingerprint"):
+                user.browser_fingerprint = user_data["browser_fingerprint"]
+            if hasattr(User, 'last_ip') and user_data.get("last_ip"):
+                user.last_ip = user_data["last_ip"]
+            if hasattr(User, 'last_user_agent') and user_data.get("last_user_agent"):
+                user.last_user_agent = user_data["last_user_agent"]
+                
+            db.add(user)
+            
+        db.flush()  # IDを取得するため
+        
+        # サブスクリプションデータを復元
+        for sub_data in backup_data.get("subscriptions", []):
+            # user_keyからuser_idを取得
+            user = db.query(User).filter(User.user_key == sub_data["user_key"]).first()
+            if user:
+                subscription = Subscription(
+                    user_id=user.id,
+                    user_key=sub_data["user_key"],
+                    stripe_customer_id=sub_data.get("stripe_customer_id"),
+                    stripe_subscription_id=sub_data.get("stripe_subscription_id"),
+                    is_active=sub_data.get("is_active", False)
+                )
+                if hasattr(Subscription, 'browser_fingerprint') and sub_data.get("browser_fingerprint"):
+                    subscription.browser_fingerprint = sub_data["browser_fingerprint"]
+                if hasattr(Subscription, 'payment_ip') and sub_data.get("payment_ip"):
+                    subscription.payment_ip = sub_data["payment_ip"]
+                    
+                db.add(subscription)
+        
+        db.commit()
+        return {"success": True, "message": "Database restored successfully"}
+        
+    except Exception as e:
+        db.rollback()
+        return {"success": False, "error": str(e)}
+
 @app.post("/api/debug/create-test-premium")
 def create_test_premium_user(request: Request, db: Session = Depends(get_db)):
     """テスト用：現在のユーザーをプレミアムに設定"""

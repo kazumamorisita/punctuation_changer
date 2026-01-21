@@ -6,10 +6,18 @@ import os
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./punctuation_checker.db")
 
-engine = create_engine(
-    DATABASE_URL, 
-    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
-)
+# PostgreSQL用の設定
+if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres://"):
+    # Render環境でpostgresql://をpostgresql+psycopg2://に変換
+    if DATABASE_URL.startswith("postgresql://"):
+        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+else:
+    # SQLite用の設定
+    engine = create_engine(
+        DATABASE_URL, 
+        connect_args={"check_same_thread": False}
+    )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
