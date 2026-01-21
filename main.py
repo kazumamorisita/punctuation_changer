@@ -250,47 +250,58 @@ def create_fingerprint(request: Request) -> str:
     return hashlib.md5(f"{client_ip}:{user_agent}".encode()).hexdigest()[:16]
 
 def find_user_by_fingerprint(db: Session, request: Request) -> Optional[str]:
-    """フィンガープリントベースでユーザーを検索（改善版）"""
-    fingerprint = create_fingerprint(request)
-    print(f"Searching for user with fingerprint: {fingerprint}")
+    """フィンガープリントベースでユーザーを検索（スキーマ互換性対応）"""
+    try:
+        fingerprint = create_fingerprint(request)
+        print(f"Searching for user with fingerprint: {fingerprint}")
+        
+        # まず、Userテーブルから直接検索（プレミアムユーザーのみ）
+        premium_user = db.query(User).filter(
+            User.browser_fingerprint == fingerprint,
+            User.is_premium == True
+        ).first()
+        
+        if premium_user:
+            print(f"Found premium user in User table: {premium_user.user_key}")
+            return premium_user.user_key
+        
+        # 次に、アクティブなサブスクリプションから検索
+        subscription = db.query(Subscription).filter(
+            Subscription.browser_fingerprint == fingerprint,
+            Subscription.is_active == True
+        ).first()
+        
+        if subscription:
+            print(f"Found premium user in Subscription table: {subscription.user_key}")
+            return subscription.user_key
+        
+        print("No premium user found with this fingerprint")
+    except Exception as e:
+        print(f"Warning: Fingerprint lookup failed (old schema?): {str(e)}")
+        # 古いスキーマの場合はNoneを返す
     
-    # まず、Userテーブルから直接検索（プレミアムユーザーのみ）
-    premium_user = db.query(User).filter(
-        User.browser_fingerprint == fingerprint,
-        User.is_premium == True
-    ).first()
-    
-    if premium_user:
-        print(f"Found premium user in User table: {premium_user.user_key}")
-        return premium_user.user_key
-    
-    # 次に、アクティブなサブスクリプションから検索
-    subscription = db.query(Subscription).filter(
-        Subscription.browser_fingerprint == fingerprint,
-        Subscription.is_active == True
-    ).first()
-    
-    if subscription:
-        print(f"Found premium user in Subscription table: {subscription.user_key}")
-        return subscription.user_key
-    
-    print("No premium user found with this fingerprint")
     return None
 
 def update_user_fingerprint(db: Session, user_key: str, request: Request):
-    """ユーザーのフィンガープリント情報を更新"""
-    fingerprint = create_fingerprint(request)
-    client_ip = request.client.host
-    user_agent = request.headers.get("user-agent", "")
-    
-    user = db.query(User).filter(User.user_key == user_key).first()
-    if user:
-        user.browser_fingerprint = fingerprint
-        user.last_ip = client_ip
-        user.last_user_agent = user_agent
-        user.last_seen = datetime.utcnow()
-        db.commit()
-        print(f"Updated fingerprint for user {user_key}: {fingerprint}")
+    """ユーザーのフィンガープリント情報を更新（スキーマ互換性対応）"""
+    try:
+        fingerprint = create_fingerprint(request)
+        client_ip = request.client.host
+        user_agent = request.headers.get("user-agent", "")
+        
+        user = db.query(User).filter(User.user_key == user_key).first()
+        if user:
+            # 新しいスキーマのフィールドが存在するかチェック
+            if hasattr(user, 'browser_fingerprint'):
+                user.browser_fingerprint = fingerprint
+                user.last_ip = client_ip
+                user.last_user_agent = user_agent
+            user.last_seen = datetime.utcnow()
+            db.commit()
+            print(f"Updated fingerprint for user {user_key}: {fingerprint}")
+    except Exception as e:
+        print(f"Warning: Could not update fingerprint for {user_key}: {str(e)}")
+        # スキーマ更新エラーは無視して続行
 
 def enhanced_get_user_key(request: Request, response: Response, db: Session) -> str:
     """拡張ユーザー識別（大幅改善版）"""
