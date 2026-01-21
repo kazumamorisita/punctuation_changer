@@ -534,6 +534,22 @@ def get_usage(request: Request, response: Response, db: Session = Depends(get_db
     """利用回数情報を取得"""
     user_key = enhanced_get_user_key(request, response, db)
     usage_info = get_usage_info(user_key, db)
+    
+    # フィンガープリント診断情報を追加
+    fingerprint = create_fingerprint(request)
+    cookie_uid = request.cookies.get("uid")
+    cookie_ufp = request.cookies.get("ufp")
+    
+    # 診断情報をusage_infoに追加
+    usage_info["debug_info"] = {
+        "user_key": user_key,
+        "fingerprint": fingerprint,
+        "cookie_uid": cookie_uid,
+        "cookie_ufp": cookie_ufp,
+        "ip": request.client.host,
+        "user_agent": request.headers.get("user-agent", "")[:50] + "..." if len(request.headers.get("user-agent", "")) > 50 else request.headers.get("user-agent", "")
+    }
+    
     print(f"Debug: User key: {user_key}, Usage info: {usage_info}")
     return usage_info
 
@@ -674,6 +690,19 @@ def clear_all_usage(db: Session = Depends(get_db)):
     
     db.commit()
     return {"message": f"Usage cleared for {len(users)} users"}
+
+@app.post("/api/debug/recreate-db")
+def recreate_database():
+    """緊急用：データベースを新しいスキーマで再作成"""
+    try:
+        from database import Base, engine
+        # 全テーブルを削除
+        Base.metadata.drop_all(bind=engine)
+        # 新しいスキーマでテーブルを再作成
+        Base.metadata.create_all(bind=engine)
+        return {"success": True, "message": "Database recreated with new schema"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 # =========================
 # Request Model
