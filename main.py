@@ -35,6 +35,9 @@ if not stripe.api_key:
 # アプリケーション設定
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:8000")
 
+# フィンガープリント機能のON/OFF（本番環境では一時的に無効化可能）
+FINGERPRINT_ENABLED = os.environ.get("FINGERPRINT_ENABLED", "true").lower() == "true"
+
 # Render環境の自動検出とHTTPS化
 if "RENDER" in os.environ:
     # Render環境の場合、RENDER_EXTERNAL_URLを優先使用
@@ -304,66 +307,76 @@ def update_user_fingerprint(db: Session, user_key: str, request: Request):
         # スキーマ更新エラーは無視して続行
 
 def enhanced_get_user_key(request: Request, response: Response, db: Session) -> str:
-    """拡張ユーザー識別（大幅改善版）"""
+    """拡張ユーザー識別（大幅改善版）- フィンガープリント機能のON/OFF対応"""
     # 通常のCookieベース識別
     user_id = request.cookies.get("uid")
-    fingerprint = create_fingerprint(request)
     
     print(f"=== Enhanced User Identification ===")
     print(f"Cookie user_id: {user_id}")
-    print(f"Current fingerprint: {fingerprint}")
+    print(f"Fingerprint enabled: {FINGERPRINT_ENABLED}")
+    
+    if FINGERPRINT_ENABLED:
+        fingerprint = create_fingerprint(request)
+        print(f"Current fingerprint: {fingerprint}")
     
     # Cookieがある場合の処理
     if user_id:
         print(f"Cookie found: {user_id}")
-        # フィンガープリント情報を更新
-        update_user_fingerprint(db, user_id, request)
+        # フィンガープリント情報を更新（有効な場合のみ）
+        if FINGERPRINT_ENABLED:
+            update_user_fingerprint(db, user_id, request)
         return user_id
     
-    # Cookieがない場合、フィンガープリントでプレミアムユーザーを検索
-    existing_user = find_user_by_fingerprint(db, request)
+    # Cookieがない場合、フィンガープリントでプレミアムユーザーを検索（有効な場合のみ）
+    if FINGERPRINT_ENABLED:
+        existing_user = find_user_by_fingerprint(db, request)
+        
+        if existing_user:
+            # プレミアムユーザーが見つかった場合、そのユーザーIDを復元
+            user_id = existing_user
+            print(f"Restored premium user from fingerprint: {user_id}")
+            
+            # Cookieを再設定
+            response.set_cookie(
+                key="uid",
+                value=user_id,
+                max_age=60*60*24*365,
+                httponly=True,
+                samesite="lax",
+                secure=True if request.url.scheme == "https" else False
+            )
+            
+            # フィンガープリント情報も更新
+            update_user_fingerprint(db, user_id, request)
+            
+            print(f"Final user_id: {user_id}")
+            print("=== End User Identification ===")
+            return user_id
     
-    if existing_user:
-        # プレミアムユーザーが見つかった場合、そのユーザーIDを復元
-        user_id = existing_user
-        print(f"Restored premium user from fingerprint: {user_id}")
-        
-        # Cookieを再設定
-        response.set_cookie(
-            key="uid",
-            value=user_id,
-            max_age=60*60*24*365,
-            httponly=True,
-            samesite="lax",
-            secure=True if request.url.scheme == "https" else False
-        )
-        
-        # フィンガープリント情報も更新
-        update_user_fingerprint(db, user_id, request)
-        
-    else:
-        # 新規ユーザー
-        user_id = str(uuid.uuid4())
-        print(f"Creating new user: {user_id}")
-        
-        response.set_cookie(
-            key="uid",
-            value=user_id,
-            max_age=60*60*24*365,
-            httponly=True,
-            samesite="lax",
-            secure=True if request.url.scheme == "https" else False
-        )
+    # 新規ユーザー
+    user_id = str(uuid.uuid4())
+    print(f"Creating new user: {user_id}")
     
-    # フィンガープリント情報Cookie（デバッグ用）
     response.set_cookie(
-        key="ufp",
-        value=fingerprint,
+        key="uid",
+        value=user_id,
         max_age=60*60*24*365,
         httponly=True,
         samesite="lax",
         secure=True if request.url.scheme == "https" else False
     )
+    
+    # フィンガープリント情報Cookie（デバッグ用、有効な場合のみ）
+    if FINGERPRINT_ENABLED:
+        fingerprint = create_fingerprint(request)
+        response.set_cookie(
+            key="ufp",
+            value=fingerprint,
+            max_age=60*60*24*365,
+            httponly=True,
+            samesite="lax",
+            secure=True if request.url.scheme == "https" else False
+        )
     
     print(f"Final user_id: {user_id}")
     print("=== End User Identification ===")
@@ -536,7 +549,7 @@ def get_usage(request: Request, response: Response, db: Session = Depends(get_db
     usage_info = get_usage_info(user_key, db)
     
     # フィンガープリント診断情報を追加
-    fingerprint = create_fingerprint(request)
+    fingerprint = create_fingerprint(request) if FINGERPRINT_ENABLED else "DISABLED"
     cookie_uid = request.cookies.get("uid")
     cookie_ufp = request.cookies.get("ufp")
     
@@ -544,6 +557,7 @@ def get_usage(request: Request, response: Response, db: Session = Depends(get_db
     usage_info["debug_info"] = {
         "user_key": user_key,
         "fingerprint": fingerprint,
+        "fingerprint_enabled": FINGERPRINT_ENABLED,
         "cookie_uid": cookie_uid,
         "cookie_ufp": cookie_ufp,
         "ip": request.client.host,
