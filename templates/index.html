@@ -969,17 +969,25 @@ async function updateUsageCounter() {
     const response = await fetch("/api/usage");
     if (response.ok) {
       const data = await response.json();
-      const remaining = data.remaining;
-      
       console.log("Usage data:", data); // デバッグ用
-      usageText.textContent = `残り${remaining}回`;
       
-      // 残り回数に応じてスタイルを変更
-      usageCounter.classList.remove("low", "empty");
-      if (remaining <= 0) {
-        usageCounter.classList.add("empty");
-      } else if (remaining <= 5) {
-        usageCounter.classList.add("low");
+      // 有料ユーザーの場合
+      if (data.premium || data.remaining === -1) {
+        usageText.textContent = "無制限";
+        usageCounter.classList.remove("low", "empty");
+        usageCounter.style.background = "linear-gradient(135deg, #28a745 0%, #20c997 100%)";
+      } else {
+        // 無料ユーザーの場合
+        const remaining = data.remaining;
+        usageText.textContent = `残り${remaining}回`;
+        
+        // 残り回数に応じてスタイルを変更
+        usageCounter.classList.remove("low", "empty");
+        if (remaining <= 0) {
+          usageCounter.classList.add("empty");
+        } else if (remaining <= 5) {
+          usageCounter.classList.add("low");
+        }
       }
     } else {
       console.error("Failed to fetch usage:", response.status, response.statusText);
@@ -1195,10 +1203,19 @@ function closeUpgradeModal() {
 }
 
 function goToPayment() {
-  alert("決済機能は近日対応予定です！");
-  closeUpgradeModal(); // 決済画面遷移後はモーダルを閉じる
-  // 将来：window.location.href = "/payment";
+  fetch("/api/create-checkout-session", {
+    method: "POST"
+  })
+  .then(res => res.json())
+  .then(data => {
+    if (data.url) {
+      window.location.href = data.url;
+    } else {
+      alert("決済開始に失敗しました");
+    }
+  });
 }
+
 
 function submitAction() {
   const selected = document.querySelector('input[name="action"]:checked');

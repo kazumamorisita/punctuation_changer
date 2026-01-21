@@ -5,11 +5,132 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from datetime import date
 import uuid
-from fastapi import  Response
+from fastapi import Response
+import stripe
+from fastapi.responses import JSONResponse
+from dotenv import load_dotenv
 
+# 環境変数の読み込み
+load_dotenv()
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
+
+# Stripe設定
+stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
+if not stripe.api_key:
+    raise ValueError("STRIPE_SECRET_KEY環境変数が設定されていません")
+
+# アプリケーション設定
+BASE_URL = os.environ.get("BASE_URL", "http://localhost:8000")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+DEBUG_MODE = os.environ.get("DEBUG", "False").lower() == "true"
+# Stripe Webhook用のインポート追加
+import json
+import hashlib
+import hmac
+
+# STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+# の後に以下を追加
+
+# ユーザーのサブスクリプション状態を管理（本番では Database を推奨）
+user_subscriptions = {}
+
+def verify_webhook_signature(payload: bytes, sig_header: str, webhook_secret: str) -> bool:
+    """Webhook署名を検証"""
+    if not webhook_secret:
+        return False
+    
+    try:
+        elements = sig_header.split(',')
+        signature = None
+        timestamp = None
+        
+        for element in elements:
+            key, value = element.split('=')
+            if key == 'v1':
+                signature = value
+            elif key == 't':
+                timestamp = value
+        
+        if not signature or not timestamp:
+            return False
+        
+        # 署名を検証
+        expected_sig = hmac.new(
+            webhook_secret.encode('utf-8'),
+            f"{timestamp}.{payload.decode('utf-8')}".encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+        
+        return hmac.compare_digest(signature, expected_sig)
+    except Exception as e:
+        print(f"Webhook signature verification failed: {str(e)}")
+        return False
+
+@app.post("/webhook/stripe")
+async def stripe_webhook(request: Request):
+    """Stripe Webhookエンドポイント"""
+    payload = await request.body()
+    sig_header = request.headers.get('stripe-signature', '')
+    
+    # 本番環境では署名検証を有効にしてください
+    if STRIPE_WEBHOOK_SECRET and not verify_webhook_signature(payload, sig_header, STRIPE_WEBHOOK_SECRET):
+        raise HTTPException(status_code=400, detail="Invalid signature")
+    
+    try:
+        event = json.loads(payload.decode('utf-8'))
+        print(f"Received webhook: {event['type']}")
+        
+        # サブスクリプション作成時
+        if event['type'] == 'checkout.session.completed':
+            session = event['data']['object']
+            user_key = session.get('client_reference_id')
+            subscription_id = session.get('subscription')
+            
+            if user_key and subscription_id:
+                user_subscriptions[user_key] = {
+                    "subscription_id": subscription_id,
+                    "status": "active",
+                    "created_at": date.today().isoformat()
+                }
+                print(f"User {user_key} subscribed with {subscription_id}")
+        
+        # サブスクリプション更新時
+        elif event['type'] == 'customer.subscription.updated':
+            subscription = event['data']['object']
+            subscription_id = subscription['id']
+            status = subscription['status']
+            
+            # user_keyでの逆引きが必要（本番ではDBで管理推奨）
+            for user_key, sub_info in user_subscriptions.items():
+                if sub_info.get("subscription_id") == subscription_id:
+                    user_subscriptions[user_key]["status"] = status
+                    print(f"Updated subscription {subscription_id} status to {status}")
+                    break
+        
+        # サブスクリプション削除時
+        elif event['type'] == 'customer.subscription.deleted':
+            subscription = event['data']['object']
+            subscription_id = subscription['id']
+            
+            # user_keyでの逆引きが必要
+            for user_key, sub_info in user_subscriptions.items():
+                if sub_info.get("subscription_id") == subscription_id:
+                    user_subscriptions[user_key]["status"] = "cancelled"
+                    print(f"Cancelled subscription {subscription_id}")
+                    break
+        
+        return {"status": "success"}
+    
+    except Exception as e:
+        print(f"Webhook processing error: {str(e)}")
+        raise HTTPException(status_code=400, detail="Webhook processing failed")
+
+def is_user_premium(user_key: str) -> bool:
+    """ユーザーが有料プランかどうかを確認"""
+    subscription = user_subscriptions.get(user_key, {})
+    return subscription.get("status") == "active"
 
 if __name__ == "__main__":
     import uvicorn
@@ -41,29 +162,133 @@ def get_user_key(request: Request, response: Response):
     return f"{today}:{ip}:{user_id}"
 
 def check_usage_limit(user_key: str):
+    # 有料ユーザーは制限なし
+    if is_user_premium(user_key):
+        return
+    
     count = usage_store.get(user_key, 0)
-    print(f"Debug: Current count for {user_key}: {count}, Limit: {USAGE_LIMIT}")  # デバッグ用
+    print(f"Debug: Current count for {user_key}: {count}, Limit: {USAGE_LIMIT}")
     if count >= USAGE_LIMIT:
         raise HTTPException(
             status_code=429,
             detail="本日の無料利用回数を超えました"
         )
     usage_store[user_key] = count + 1
-    print(f"Debug: Updated count for {user_key}: {usage_store[user_key]}")  # デバッグ用
+    print(f"Debug: Updated count for {user_key}: {usage_store[user_key]}")
 
 def get_usage_info(user_key: str):
+    # 有料ユーザーの場合
+    if is_user_premium(user_key):
+        return {
+            "used": 0,
+            "remaining": -1,  # -1 = 無制限を示す
+            "limit": -1,
+            "premium": True
+        }
+    
+    # 無料ユーザーの場合
     count = usage_store.get(user_key, 0)
     remaining = max(0, USAGE_LIMIT - count)
     return {
         "used": count,
         "remaining": remaining,
-        "limit": USAGE_LIMIT
+        "limit": USAGE_LIMIT,
+        "premium": False
     }
 
 
 # =========================
 # HTML
 # =========================
+@app.post("/api/create-checkout-session")
+def create_checkout_session(request: Request):
+    try:
+        # ユーザー識別のため（将来的にサブスクリプション管理で使用）
+        user_key = request.cookies.get("uid", str(uuid.uuid4()))
+        
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            mode="subscription",
+            line_items=[{
+                "price_data": {
+                    "currency": "jpy",
+                    "product_data": {
+                        "name": "句読点チェッカー 有料プラン",
+                        "description": "回数無制限で句読点チェッカーをご利用いただけます",
+                    },
+                    "unit_amount": 300,
+                    "recurring": {"interval": "month"},
+                },
+                "quantity": 1,
+            }],
+            success_url=f"{BASE_URL}/success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{BASE_URL}/cancel",
+            client_reference_id=user_key,  # ユーザー識別用
+            metadata={
+                "user_key": user_key,
+                "plan": "premium"
+            }
+        )
+        return JSONResponse({"url": session.url})
+    except stripe.error.StripeError as e:
+        print(f"Stripe error: {str(e)}")
+        return JSONResponse({"error": "決済システムでエラーが発生しました"}, status_code=400)
+    except Exception as e:
+        print(f"General error: {str(e)}")
+        return JSONResponse({"error": "予期しないエラーが発生しました"}, status_code=500)
+
+@app.get("/success", response_class=HTMLResponse)
+def success(request: Request, session_id: str = None):
+    """決済完了ページ"""
+    if session_id:
+        try:
+            # セッション情報を取得して確認
+            session = stripe.checkout.Session.retrieve(session_id)
+            if session.payment_status == "paid":
+                return """
+                <html>
+                <head><title>決済完了</title></head>
+                <body style="font-family: sans-serif; text-align: center; padding: 50px;">
+                    <h1>✅ 決済が完了しました</h1>
+                    <p>有料プランへのアップグレードが完了いたしました。</p>
+                    <p>これで回数制限なくご利用いただけます。</p>
+                    <a href="/" style="background: #007bff; color: white; padding: 10px 20px; 
+                       text-decoration: none; border-radius: 5px;">アプリに戻る</a>
+                </body>
+                </html>
+                """
+        except Exception as e:
+            print(f"Session validation error: {str(e)}")
+    
+    return """
+    <html>
+    <head><title>決済完了</title></head>
+    <body style="font-family: sans-serif; text-align: center; padding: 50px;">
+        <h1>✅ 決済が完了しました</h1>
+        <p>決済処理が完了いたしました。</p>
+        <a href="/" style="background: #007bff; color: white; padding: 10px 20px; 
+           text-decoration: none; border-radius: 5px;">アプリに戻る</a>
+    </body>
+    </html>
+    """
+
+@app.get("/cancel", response_class=HTMLResponse)
+def cancel():
+    """決済キャンセルページ"""
+    return """
+    <html>
+    <head><title>決済キャンセル</title></head>
+    <body style="font-family: sans-serif; text-align: center; padding: 50px;">
+        <h1>❌ 決済がキャンセルされました</h1>
+        <p>決済処理がキャンセルされました。</p>
+        <p>必要に応じて、再度お試しください。</p>
+        <a href="/" style="background: #6c757d; color: white; padding: 10px 20px; 
+           text-decoration: none; border-radius: 5px;">アプリに戻る</a>
+    </body>
+    </html>
+    """
+
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     return templates.TemplateResponse(
@@ -81,14 +306,19 @@ def get_usage(request: Request, response: Response):
 @app.get("/api/debug/usage")
 def debug_usage():
     """デバッグ用：全ユーザーの利用状況を表示"""
+    if not DEBUG_MODE:
+        raise HTTPException(status_code=404, detail="Not found")
     return {
         "usage_store": dict(usage_store),
+        "subscriptions": dict(user_subscriptions),
         "limit": USAGE_LIMIT
     }
 
 @app.post("/api/debug/reset")
 def reset_usage(request: Request, response: Response):
     """デバッグ用：現在のユーザーの利用回数をリセット"""
+    if not DEBUG_MODE:
+        raise HTTPException(status_code=404, detail="Not found")
     user_key = get_user_key(request, response)
     if user_key in usage_store:
         del usage_store[user_key]
@@ -97,6 +327,8 @@ def reset_usage(request: Request, response: Response):
 @app.post("/api/debug/clear-all")
 def clear_all_usage():
     """デバッグ用：全ユーザーの利用回数をクリア"""
+    if not DEBUG_MODE:
+        raise HTTPException(status_code=404, detail="Not found")
     usage_store.clear()
     return {"message": "All usage data cleared"}
 
