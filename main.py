@@ -718,6 +718,29 @@ def recreate_database():
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+@app.get("/api/debug/recreate-db-get")
+def recreate_database_get():
+    """GET版：データベースを新しいスキーマで再作成（ブラウザからアクセス可能）"""
+    try:
+        from database import Base, engine
+        # データベース接続情報を表示
+        db_url = str(engine.url)
+        db_type = "PostgreSQL" if db_url.startswith("postgresql") else "SQLite"
+        
+        # 全テーブルを削除
+        Base.metadata.drop_all(bind=engine)
+        # 新しいスキーマでテーブルを再作成
+        Base.metadata.create_all(bind=engine)
+        
+        return {
+            "success": True, 
+            "message": "Database recreated with new schema",
+            "database_type": db_type,
+            "database_url": db_url.replace(db_url.split('@')[0].split('//')[1], "***") if '@' in db_url else db_url
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 @app.get("/api/admin/backup")
 def backup_database(db: Session = Depends(get_db)):
     """データベースの全データをJSONでエクスポート（緊急時のバックアップ用）"""
