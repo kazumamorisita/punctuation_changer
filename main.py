@@ -42,12 +42,23 @@ def get_user_key(request: Request, response: Response):
 
 def check_usage_limit(user_key: str):
     count = usage_store.get(user_key, 0)
+    print(f"Debug: Current count for {user_key}: {count}, Limit: {USAGE_LIMIT}")  # デバッグ用
     if count >= USAGE_LIMIT:
         raise HTTPException(
             status_code=429,
             detail="本日の無料利用回数を超えました"
         )
     usage_store[user_key] = count + 1
+    print(f"Debug: Updated count for {user_key}: {usage_store[user_key]}")  # デバッグ用
+
+def get_usage_info(user_key: str):
+    count = usage_store.get(user_key, 0)
+    remaining = max(0, USAGE_LIMIT - count)
+    return {
+        "used": count,
+        "remaining": remaining,
+        "limit": USAGE_LIMIT
+    }
 
 
 # =========================
@@ -59,6 +70,29 @@ def index(request: Request):
         "index.html",
         {"request": request}
     )
+
+@app.get("/api/usage")
+def get_usage(request: Request, response: Response):
+    user_key = get_user_key(request, response)
+    usage_info = get_usage_info(user_key)
+    print(f"Debug: User key: {user_key}, Usage info: {usage_info}")  # デバッグ用
+    return usage_info
+
+@app.get("/api/debug/usage")
+def debug_usage():
+    """デバッグ用：全ユーザーの利用状況を表示"""
+    return {
+        "usage_store": dict(usage_store),
+        "limit": USAGE_LIMIT
+    }
+
+@app.post("/api/debug/reset")
+def reset_usage(request: Request, response: Response):
+    """デバッグ用：現在のユーザーの利用回数をリセット"""
+    user_key = get_user_key(request, response)
+    if user_key in usage_store:
+        del usage_store[user_key]
+    return {"message": f"Usage reset for user: {user_key}"}
 
 # =========================
 # Request Model

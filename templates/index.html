@@ -756,9 +756,49 @@ button.secondary {
   position: relative;
 }
 
-.centered {
-  text-align: center;
-  margin: 0 auto
+/* 利用回数表示 */
+.usage-counter {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  color: #495057;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid #dee2e6;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  user-select: none;
+  transition: all 0.3s ease;
+}
+
+.usage-counter:hover {
+  background: linear-gradient(135deg, #e9ecef 0%, #dee2e6 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+
+.usage-counter.low {
+  background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+  color: #856404;
+  border-color: #ffeaa7;
+}
+
+.usage-counter.empty {
+  background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%);
+  color: #721c24;
+  border-color: #f5c6cb;
+}
+
+@media (max-width: 768px) {
+  .usage-counter {
+    position: static;
+    display: block;
+    text-align: center;
+    margin: 10px auto 20px;
+    max-width: 200px;
+  }
 }
 
 </style>
@@ -766,6 +806,11 @@ button.secondary {
 
 <body>
 <div class="main-layout">
+  <!-- 利用回数表示 -->
+  <div id="usageCounter" class="usage-counter">
+    <span id="usageText">読み込み中...</span>
+  </div>
+  
   <!-- 左画面：メインコンテンツ -->
   <div class="left-screen">
     <div class="container">
@@ -870,6 +915,60 @@ const statsJumpButton = document.getElementById("statsJumpButton");
 const pieChart = document.getElementById("pieChart");
 const chartLegend = document.getElementById("chartLegend");
 const widthGroup = document.getElementById("widthGroup");
+const usageCounter = document.getElementById("usageCounter");
+const usageText = document.getElementById("usageText");
+
+// 利用回数取得関数
+async function updateUsageCounter() {
+  try {
+    const response = await fetch("/api/usage");
+    if (response.ok) {
+      const data = await response.json();
+      const remaining = data.remaining;
+      
+      console.log("Usage data:", data); // デバッグ用
+      usageText.textContent = `残り${remaining}回`;
+      
+      // 残り回数に応じてスタイルを変更
+      usageCounter.classList.remove("low", "empty");
+      if (remaining <= 0) {
+        usageCounter.classList.add("empty");
+      } else if (remaining <= 5) {
+        usageCounter.classList.add("low");
+      }
+    } else {
+      console.error("Failed to fetch usage:", response.status, response.statusText);
+      usageText.textContent = "利用回数不明";
+    }
+  } catch (error) {
+    console.error("Error fetching usage:", error);
+    usageText.textContent = "利用回数不明";
+  }
+}
+
+// ページ読み込み時に利用回数を取得
+updateUsageCounter();
+
+// デバッグ用：利用回数リセット機能（開発時のみ）
+async function resetUsageCount() {
+  try {
+    const response = await fetch("/api/debug/reset", { method: "POST" });
+    if (response.ok) {
+      const data = await response.json();
+      console.log("Reset result:", data);
+      updateUsageCounter(); // リセット後に表示更新
+      alert("利用回数をリセットしました");
+    } else {
+      alert("リセットに失敗しました");
+    }
+  } catch (error) {
+    console.error("Reset error:", error);
+    alert("リセットエラーが発生しました");
+  }
+}
+
+// デバッグ用：コンソールからリセット可能にする
+window.resetUsageCount = resetUsageCount;
 
 document.querySelectorAll('input[name="action"]').forEach(radio => {
   radio.addEventListener("change", () => {
@@ -1141,6 +1240,9 @@ function submitAction() {
         resultSummary.innerHTML = `<div class="diff-summary">ℹ️ 変換の必要はありませんでした</div>`;
       }
     }
+    
+    // 利用回数を更新
+    updateUsageCounter();
   })
   .catch((error) => {
     // レート制限エラーの場合は何も処理しない（既に処理済み）
