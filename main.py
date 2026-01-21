@@ -3,6 +3,10 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from datetime import date
+import uuid
+from fastapi import  Response
+
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
@@ -15,6 +19,37 @@ if __name__ == "__main__":
         port=int(os.environ.get("PORT", 8000))
     )
 
+USAGE_LIMIT = 20
+
+usage_store = {}
+
+def get_user_key(request: Request, response: Response):
+    ip = request.client.host
+
+    user_id = request.cookies.get("uid")
+    if not user_id:
+        user_id = str(uuid.uuid4())
+        response.set_cookie(
+            key="uid",
+            value=user_id,
+            max_age=60*60*24*365,
+            httponly=True,
+            samesite="lax"
+        )
+    
+    today = date.today().isoformat()
+    return f"{today}:{ip}:{user_id}"
+
+def check_usage_limit(user_key: str):
+    count = usage_store.get(user_key, 0)
+    if count >= USAGE_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail="本日の無料利用回数を超えました"
+        )
+    usage_store[user_key] = count + 1
+
+
 # =========================
 # HTML
 # =========================
@@ -24,7 +59,6 @@ def index(request: Request):
         "index.html",
         {"request": request}
     )
-
 
 # =========================
 # Request Model
@@ -206,7 +240,13 @@ def process_line(line, line_no, mode, active_style, width, global_start_pos=0):
 # API
 # =========================
 @app.post("/api/punctuation/check")
-def check_punctuation(req: CheckRequest):
+def check_punctuation(
+    req: CheckRequest,
+    request: Request,
+    response: Response
+):
+    user_key = get_user_key(request, response)
+    check_usage_limit(user_key)
 
     # ---- validation ----
     if not req.text.strip():

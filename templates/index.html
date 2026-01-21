@@ -1044,7 +1044,19 @@ function submitAction() {
     })
   })
   .then(res => {
-    // エラーレスポンスの処理
+    // 429エラー（レート制限）の特別処理
+    if (res.status === 429) {
+      resultArea.style.display = "block";
+      resultTitle.textContent = "利用制限";
+      rightScreen.classList.remove("show");
+      resultText.textContent = "⚠️ 本日の無料利用回数を超えました";
+      resultSummary.textContent = "";
+      copyButton.style.display = "none";
+      statisticsArea.style.display = "none";
+      return Promise.reject("rate_limit"); // 特別なリジェクトでchainを停止
+    }
+    
+    // その他のエラーレスポンスの処理
     if (!res.ok) {
       return res.json().then(errorData => {
         throw new Error(errorData.detail || `サーバーエラー (${res.status})`);
@@ -1131,6 +1143,11 @@ function submitAction() {
     }
   })
   .catch((error) => {
+    // レート制限エラーの場合は何も処理しない（既に処理済み）
+    if (error === "rate_limit") {
+      return;
+    }
+    
     resultArea.style.display = "block";
     resultTitle.textContent = "エラー";
     
