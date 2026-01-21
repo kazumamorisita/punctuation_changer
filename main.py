@@ -759,6 +759,135 @@ def backup_database(db: Session = Depends(get_db)):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+@app.get("/api/admin/db-status")
+def check_database_status(db: Session = Depends(get_db)):
+    """データベースの登録状況を確認"""
+    try:
+        # 各テーブルの件数を取得
+        user_count = db.query(User).count()
+        subscription_count = db.query(Subscription).count()
+        active_subscriptions = db.query(Subscription).filter(Subscription.is_active == True).count()
+        premium_users = db.query(User).filter(User.is_premium == True).count()
+        
+        # 最新のユーザー5件を取得
+        recent_users = db.query(User).order_by(User.id.desc()).limit(5).all()
+        recent_subscriptions = db.query(Subscription).order_by(Subscription.id.desc()).limit(5).all()
+        
+        return {
+            "summary": {
+                "total_users": user_count,
+                "total_subscriptions": subscription_count,
+                "active_subscriptions": active_subscriptions,
+                "premium_users": premium_users,
+                "database_type": "PostgreSQL" if str(db.bind.url).startswith("postgres") else "SQLite"
+            },
+            "recent_users": [
+                {
+                    "id": user.id,
+                    "user_key": user.user_key[:8] + "...",  # プライバシー配慮で短縮
+                    "is_premium": user.is_premium,
+                    "daily_usage_count": user.daily_usage_count,
+                    "created_at": user.created_at.isoformat() if user.created_at else None,
+                    "has_fingerprint": bool(getattr(user, 'browser_fingerprint', None))
+                } for user in recent_users
+            ],
+            "recent_subscriptions": [
+                {
+                    "id": sub.id,
+                    "user_key": sub.user_key[:8] + "...",  # プライバシー配慮で短縮
+                    "is_active": sub.is_active,
+                    "stripe_customer_id": sub.stripe_customer_id[:8] + "..." if sub.stripe_customer_id else None,
+                    "created_at": sub.created_at.isoformat() if sub.created_at else None,
+                    "has_fingerprint": bool(getattr(sub, 'browser_fingerprint', None))
+                } for sub in recent_subscriptions
+            ]
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.get("/api/admin/user-search/{user_key}")
+def search_user_by_key(user_key: str, db: Session = Depends(get_db)):
+    """特定のユーザーキーでユーザー情報を検索"""
+    try:
+        user = db.query(User).filter(User.user_key == user_key).first()
+        if not user:
+            return {"found": False, "message": "User not found"}
+        
+        # ユーザーのサブスクリプション情報も取得
+        subscriptions = db.query(Subscription).filter(Subscription.user_key == user_key).all()
+        
+        return {
+            "found": True,
+            "user": {
+                "id": user.id,
+                "user_key": user.user_key,
+                "email": user.email,
+                "is_premium": user.is_premium,
+                "daily_usage_count": user.daily_usage_count,
+                "daily_usage_date": user.daily_usage_date,
+                "created_at": user.created_at.isoformat() if user.created_at else None,
+                "last_seen": user.last_seen.isoformat() if getattr(user, 'last_seen', None) else None,
+                "browser_fingerprint": getattr(user, 'browser_fingerprint', None),
+                "last_ip": getattr(user, 'last_ip', None),
+                "last_user_agent": getattr(user, 'last_user_agent', None)
+            },
+            "subscriptions": [
+                {
+                    "id": sub.id,
+                    "stripe_customer_id": sub.stripe_customer_id,
+                    "stripe_subscription_id": sub.stripe_subscription_id,
+                    "is_active": sub.is_active,
+                    "created_at": sub.created_at.isoformat() if sub.created_at else None,
+                    "browser_fingerprint": getattr(sub, 'browser_fingerprint', None),
+                    "payment_ip": getattr(sub, 'payment_ip', None)
+                } for sub in subscriptions
+            ]
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.get("/api/admin/fingerprint-search/{fingerprint}")
+def search_by_fingerprint(fingerprint: str, db: Session = Depends(get_db)):
+    """フィンガープリントで関連ユーザーを検索"""
+    try:
+        # ユーザーテーブルから検索
+        users = []
+        subscriptions = []
+        
+        try:
+            users = db.query(User).filter(User.browser_fingerprint == fingerprint).all()
+        except Exception:
+            pass  # browser_fingerprintカラムが存在しない場合
+            
+        try:
+            subscriptions = db.query(Subscription).filter(Subscription.browser_fingerprint == fingerprint).all()
+        except Exception:
+            pass  # browser_fingerprintカラムが存在しない場合
+        
+        return {
+            "fingerprint": fingerprint,
+            "found_users": len(users),
+            "found_subscriptions": len(subscriptions),
+            "users": [
+                {
+                    "user_key": user.user_key,
+                    "is_premium": user.is_premium,
+                    "daily_usage_count": user.daily_usage_count,
+                    "created_at": user.created_at.isoformat() if user.created_at else None
+                } for user in users
+            ],
+            "subscriptions": [
+                {
+                    "user_key": sub.user_key,
+                    "is_active": sub.is_active,
+                    "stripe_customer_id": sub.stripe_customer_id,
+                    "created_at": sub.created_at.isoformat() if sub.created_at else None
+                } for sub in subscriptions
+            ]
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 @app.post("/api/admin/restore")
 async def restore_database(request: Request, db: Session = Depends(get_db)):
     """バックアップデータからデータベースを復元"""
