@@ -1,0 +1,1416 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>句読点チェッカー</title>
+
+<style>
+/* ===== 全体 ===== */
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  background: #f7f7f7;
+  margin: 0;
+  padding: 0;
+  color: #333;
+  min-height: 100vh;
+}
+
+/* ===== メインレイアウト ===== */
+.main-layout {
+  display: flex;
+  min-height: 100vh;
+  flex-wrap: wrap;
+}
+
+.left-screen {
+  flex: 1;
+  min-width: 300px;
+  padding: 40px;
+}
+
+.right-screen {
+  flex: 0 0 400px;
+  min-width: 320px;
+  background: #e3f2fd;
+  padding: 40px;
+  border-left: 2px solid #1976d2;
+  display: none;
+}
+
+.right-screen.show {
+  display: block;
+}
+
+.container {
+  max-width: 800px;
+  margin: auto;
+  background: #fff;
+  padding: 30px;
+  border-radius: 8px;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+}
+
+h1 {
+  margin-top: 0;
+}
+
+/* ===== 入力 ===== */
+textarea {
+  width: 100%;
+  height: 180px;
+  font-size: 16px;
+  padding: 12px;
+  box-sizing: border-box;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+  resize: vertical;
+}
+
+/* ===== ボタン ===== */
+button {
+  margin-top: 16px;
+  padding: 10px 18px;
+  font-size: 16px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+}
+
+button.primary {
+  background: #007bff;
+  color: #fff;
+}
+
+button.secondary {
+  background: #ddd;
+}
+
+/* 実行ボタンの中央揃え */
+#executeBtn {
+  display: block;
+  margin: 16px auto;
+}
+
+/* ===== 結果 ===== */
+#resultArea {
+  margin-top: 30px;
+}
+
+#resultTitle {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+#resultText {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  background: #f2f2f2;
+  padding: 12px;
+  border-radius: 6px;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* ===== モーダル ===== */
+.modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  justify-content: center;
+  align-items: center;
+}
+
+.modal-content {
+  background: #fff;
+  padding: 24px;
+  border-radius: 8px;
+  width: 90%;
+  max-width: 420px;
+}
+
+.modal h2 {
+  margin-top: 0;
+}
+
+.option-group {
+  margin-bottom: 16px;
+}
+
+.option-group label {
+  display: block;
+  margin: 6px 0;
+  cursor: pointer;
+}
+
+.modal-footer {
+  text-align: right;
+}
+
+/* ===== ハイライト ===== */
+.highlight-jp-comma {
+  background-color: #fff3cd;
+  border-bottom: 2px solid #f0ad4e;
+}
+
+.highlight-jp-period {
+  background-color: #d4edda;
+  border-bottom: 2px solid #28a745;
+}
+
+.highlight-en-comma-full {
+  background-color: #d1ecf1;
+  border-bottom: 2px solid #17a2b8;
+}
+
+.highlight-en-comma-half {
+  background-color: #f8d7da;
+  border-bottom: 2px solid #dc3545;
+}
+
+.highlight-en-period-full {
+  background-color: #e2e3ff;
+  border-bottom: 2px solid #6f42c1;
+}
+
+.highlight-en-period-half {
+  background-color: #fff2cc;
+  border-bottom: 2px solid #fd7e14;
+}
+
+.issue-list {
+  margin-top: 12px;
+  font-size: 14px;
+  color: #555;
+}
+
+.issue-detail {
+  font-size: 13px;
+  color: #666;
+  line-height: 1.4;
+}
+
+.issue-item {
+  padding: 12px 16px;
+  margin: 8px 0;
+  background: linear-gradient(145deg, #ffffff, #f0f0f0);
+  border: 2px solid #e0e0e0;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 3px 6px rgba(0,0,0,0.12);
+  position: relative;
+  user-select: none;
+  font-weight: 500;
+  font-size: 13px;
+  color: #666;
+  line-height: 1.4;
+}
+
+.issue-item::before {
+  content: "🎯";
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0.6;
+  font-size: 12px;
+}
+
+.issue-item:hover {
+  background: linear-gradient(145deg, #fff3cd, #ffeaa7);
+  border-color: #f39c12;
+  box-shadow: 0 6px 12px rgba(243,156,18,0.3);
+  transform: translateY(-2px);
+  color: #333;
+}
+
+.issue-item:hover::before {
+  opacity: 1;
+}
+
+.issue-item:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(243,156,18,0.2);
+}
+
+/* ジャンプハイライト用スタイル */
+.highlight-target {
+  background-color: #ff6b6b !important;
+  animation: pulse-highlight 2s ease-in-out;
+}
+
+@keyframes pulse-highlight {
+  0% { background-color: #ff6b6b; }
+  50% { background-color: #ff8e8e; }
+  100% { background-color: #ff6b6b; }
+}
+
+/* ===== 統計 =====  */
+#statisticsArea {
+  margin-top: 20px;
+  padding: 12px;
+  background: #f8f9fa;
+  border-radius: 6px;
+  border-left: 4px solid #007bff;
+}
+
+#statisticsContent {
+  font-size: 14px;
+  color: #495057;
+}
+
+#statisticsContent div {
+  margin: 4px 0;
+}
+
+/* ===== 左右分割レイアウト ===== */
+.split-layout {
+  display: flex;
+  gap: 30px;
+  margin-top: 30px;
+}
+
+.left-panel {
+  flex: 1;
+}
+
+.right-panel {
+  flex: 0 0 350px;
+  background: #f8f9fa;
+  padding: 20px;
+  border-radius: 8px;
+  border-left: 4px solid #007bff;
+}
+
+.right-panel h4 {
+  margin-top: 0;
+  color: #495057;
+}
+
+.stats-section {
+  margin-bottom: 20px;
+}
+
+.summary-section {
+  font-size: 16px;
+  font-weight: 500;
+  color: #495057;
+}
+
+/* ===== 統計項目のボタン風スタイル ===== */
+.stats-item {
+  padding: 12px 16px;
+  margin: 8px 0;
+  background: linear-gradient(145deg, #ffffff, #f0f0f0);
+  border: 2px solid #e0e0e0;
+  border-radius: 10px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 3px 6px rgba(0,0,0,0.12);
+  position: relative;
+  user-select: none;
+  font-weight: 500;
+}
+
+.stats-item::before {
+  content: "👆";
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0.6;
+  font-size: 12px;
+}
+
+.stats-item:hover {
+  background: linear-gradient(145deg, #e3f2fd, #bbdefb);
+  border-color: #2196f3;
+  box-shadow: 0 6px 12px rgba(33,150,243,0.3);
+  transform: translateY(-2px);
+}
+
+.stats-item:hover::before {
+  opacity: 1;
+}
+
+.stats-item:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(33,150,243,0.2);
+}
+
+.stats-item.filtered {
+  background: linear-gradient(145deg, #1976d2, #1565c0);
+  color: white;
+  border-color: #0d47a1;
+  box-shadow: 0 4px 8px rgba(25,118,210,0.4);
+}
+
+.stats-item.filtered::before {
+  content: "✓";
+  color: white;
+  opacity: 1;
+}
+
+.stats-point {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+
+.stats-point.jp-comma {
+  background-color: #f0ad4e;
+}
+
+.stats-point.jp-period {
+  background-color: #28a745;
+}
+
+.stats-point.en-comma-full {
+  background-color: #17a2b8;
+}
+
+.stats-point.en-comma-half {
+  background-color: #dc3545;
+}
+
+.stats-point.en-period-full {
+  background-color: #6f42c1;
+}
+
+.stats-point.en-period-half {
+  background-color: #fd7e14;
+}
+
+/* ===== 円グラフ ===== */
+.chart-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.chart-title {
+  color: #1976d2;
+  margin: 0;
+  font-size: 24px;
+  flex: 1;
+}
+
+.pie-chart {
+  width: 80px;
+  height: 80px;
+  margin-left: 20px;
+}
+
+.chart-legend {
+  margin-top: 10px;
+  font-size: 11px;
+  color: #666;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ===== 差分表示 ===== */
+.diff-container {
+  position: relative;
+  line-height: 1.6;
+  padding: 15px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e9ecef;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.diff-changed {
+  background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+  color: #1976d2;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-weight: 500;
+  border: 1px solid #90caf9;
+  cursor: pointer;
+  position: relative;
+  display: inline;
+  transition: all 0.2s ease;
+}
+
+.diff-changed:hover {
+  background: linear-gradient(135deg, #1976d2 0%, #1565c0 100%);
+  color: white;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(25, 118, 210, 0.3);
+}
+
+.diff-tooltip {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.9);
+  color: white;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+  z-index: 1000;
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.2s ease;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 5px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+.diff-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  border: 6px solid transparent;
+  border-top-color: rgba(0, 0, 0, 0.9);
+  transform: translateX(-50%);
+}
+
+.diff-changed:hover .diff-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+
+.diff-summary {
+  margin-top: 15px;
+  padding: 10px;
+  background: #e8f5e8;
+  border-left: 4px solid #4caf50;
+  border-radius: 0 6px 6px 0;
+  font-size: 14px;
+  color: #2e7d32;
+}
+
+/* ===== レスポンシブデザイン ===== */
+
+/* タブレットサイズ */
+@media (max-width: 1024px) {
+  .main-layout {
+    flex-direction: column;
+  }
+  
+  .left-screen,
+  .right-screen {
+    padding: 30px 20px;
+    flex: none;
+  }
+  
+  .right-screen {
+    border-left: none;
+    border-top: 2px solid #1976d2;
+  }
+  
+  .chart-container {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  
+  .pie-chart {
+    margin-left: 0;
+    margin-top: 10px;
+  }
+}
+
+/* モバイルサイズ */
+@media (max-width: 768px) {
+  .left-screen,
+  .right-screen {
+    padding: 20px 15px;
+  }
+  
+  h1 {
+    font-size: 24px;
+    text-align: center;
+  }
+  
+  .chart-title {
+    font-size: 20px;
+  }
+
+  .chart-container {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+  
+  textarea {
+    height: 150px;
+    font-size: 14px;
+  }
+  
+  .stats-item,
+  .issue-item {
+    padding: 10px 12px;
+    font-size: 13px;
+  }
+  
+  .copy-button {
+    padding: 10px 14px;
+    font-size: 14px;
+  }
+  
+  #resultText,
+  .diff-container {
+    font-size: 14px;
+    padding: 10px;
+    word-break: break-all; /* モバイルではより積極的に折り返し */
+  }
+  
+  .modal-content {
+    width: 95%;
+    margin: 20px auto;
+  }
+  
+  .pie-chart {
+    width: 60px;
+    height: 60px;
+  }
+  
+  .chart-legend {
+    font-size: 10px;
+  }
+}
+
+/* 小型モバイル */
+@media (max-width: 480px) {
+  .left-screen,
+  .right-screen {
+    padding: 15px 10px;
+  }
+  
+  h1 {
+    font-size: 20px;
+  }
+  
+  .chart-title {
+    font-size: 18px;
+  }
+
+  .chart-container {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+  
+  textarea {
+    height: 120px;
+    font-size: 14px;
+  }
+  
+  .stats-item,
+  .issue-item {
+    padding: 8px 10px;
+    font-size: 12px;
+    margin: 4px 0;
+  }
+  
+  .copy-button {
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+  
+  #resultText,
+  .diff-container {
+    font-size: 13px;
+    padding: 8px;
+    line-height: 1.4;
+    word-break: break-all; /* 小型モバイルではより積極的に折り返し */
+  }
+  
+  .pie-chart {
+    width: 50px;
+    height: 50px;
+  }
+  
+  .chart-legend {
+    font-size: 9px;
+    gap: 4px;
+  }
+  
+  .stats-section,
+  .summary-section {
+    padding: 15px;
+  }
+  
+  /* スマートフォンでのみ統計ジャンプボタンを表示 */
+  .stats-jump-button {
+    display: inline-block !important;
+  }
+}
+
+/* ===== コピーボタン ===== */
+.copy-container {
+  position: relative;
+  margin-top: 10px;
+  text-align: center;
+}
+
+.copy-button {
+  background: linear-gradient(145deg, #28a745, #20c997);
+  color: white;
+  border: 2px solid #1e7e34;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 4px rgba(40,167,69,0.3);
+  position: relative;
+  user-select: none;
+  display: inline-block;
+}
+
+.copy-button::before {
+  content: "📋";
+  margin-right: 6px;
+}
+
+.copy-button:hover {
+  background: linear-gradient(145deg, #218838, #1abc9c);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(40,167,69,0.4);
+}
+
+.copy-button:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(40,167,69,0.2);
+}
+
+.copy-button.success {
+  background: linear-gradient(145deg, #17a2b8, #138496);
+  border-color: #117a8b;
+}
+
+.copy-button.success::before {
+  content: "✓";
+}
+
+/* モバイル用統計ジャンプボタン */
+.stats-jump-button {
+  background: linear-gradient(145deg, #6f42c1, #5a32a3);
+  color: white;
+  border: 2px solid #4c2a85;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 4px rgba(111,66,193,0.3);
+  position: relative;
+  user-select: none;
+  display: none; /* デフォルトで非表示 */
+  margin: 0 10px;
+}
+
+.stats-jump-button::before {
+  content: "📊";
+  margin-right: 6px;
+}
+
+.stats-jump-button:hover {
+  background: linear-gradient(145deg, #5a32a3, #4c2a85);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(111,66,193,0.4);
+}
+
+.stats-jump-button:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(111,66,193,0.2);
+}
+
+#resultText {
+  position: relative;
+}
+
+.centered {
+  text-align: center;
+  margin: 0 auto
+}
+
+</style>
+</head>
+
+<body>
+<div class="main-layout">
+  <!-- 左画面：メインコンテンツ -->
+  <div class="left-screen">
+    <div class="container">
+      <h1 class="centered">句読点チェッカー</h1>
+
+      <textarea id="inputText" placeholder="ここに文章を入力してください"></textarea>
+
+      <button class="primary" id="executeBtn">実行する</button>
+
+      <div id="resultArea" style="display:none;">
+        <div style="display: flex; align-items: center; justify-content: center; flex-wrap: wrap;">
+          <h3 id="resultTitle"></h3>
+          <button class="stats-jump-button" id="statsJumpButton" onclick="jumpToStats()">統計情報を見る</button>
+        </div>
+        <div class="copy-container">
+          <button class="copy-button" id="copyButton" onclick="copyResultText()" style="display:none;">結果をコピー</button>
+        </div>
+        <div id="resultText"></div>
+        <div id="statisticsArea" style="display:none;">
+          <h4>句読点の統計</h4>
+          <div id="statisticsContent"></div>
+        </div>
+        <h4 id="resultSummary"></h4>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右画面：統計情報 -->
+  <div class="right-screen" id="rightScreen">
+    <div class="chart-container">
+      <h2 class="chart-title">句読点分析結果</h2>
+      <div>
+        <svg class="pie-chart" id="pieChart" viewBox="0 0 42 42"></svg>
+        <div class="chart-legend" id="chartLegend"></div>
+      </div>
+    </div>
+    
+    <div class="stats-section">
+      <h3>統計情報</h3>
+      <div id="rightStatsContent"></div>
+    </div>
+    
+    <div class="summary-section">
+      <h3>詳細情報</h3>
+      <div id="rightSummaryContent"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== モーダル ===== -->
+<div class="modal" id="modal">
+  <div class="modal-content">
+    <h2>どうしたいですか？</h2>
+
+    <div class="option-group">
+      <strong>チェック</strong>
+      <label><input type="radio" name="action" value="check-auto"> 句読点をチェック(文章中の,.，．、。を数える)</label>
+    </div>
+
+    <div class="option-group">
+      <strong>変換</strong>
+      <label><input type="radio" name="action" value="convert-jp"> 日本語の句読点に統一</label>
+      <label><input type="radio" name="action" value="convert-en"> 英語の句読点に統一</label>
+    </div>
+
+    <div class="option-group" id="widthGroup" style="display:none;">
+        <strong>表記</strong>
+        <label>
+            <input type="radio" name="width" value="full" checked>
+            全角（，．）
+        </label>
+        <label>
+            <input type="radio" name="width" value="half">
+            半角（,.）
+        </label>
+    </div>  
+
+    <div class="modal-footer">
+      <button class="secondary" onclick="closeModal()">キャンセル</button>
+      <button class="primary" onclick="submitAction()">実行</button>
+    </div>
+  </div>
+</div>
+
+
+
+<script>
+const modal = document.getElementById("modal");
+const inputText = document.getElementById("inputText");
+const resultArea = document.getElementById("resultArea");
+const resultTitle = document.getElementById("resultTitle");
+const resultText = document.getElementById("resultText");
+const resultSummary = document.getElementById("resultSummary");
+const statisticsArea = document.getElementById("statisticsArea");
+const statisticsContent = document.getElementById("statisticsContent");
+const rightScreen = document.getElementById("rightScreen");
+const rightStatsContent = document.getElementById("rightStatsContent");
+const rightSummaryContent = document.getElementById("rightSummaryContent");
+const copyButton = document.getElementById("copyButton");
+const statsJumpButton = document.getElementById("statsJumpButton");
+const pieChart = document.getElementById("pieChart");
+const chartLegend = document.getElementById("chartLegend");
+const widthGroup = document.getElementById("widthGroup");
+
+document.querySelectorAll('input[name="action"]').forEach(radio => {
+  radio.addEventListener("change", () => {
+    if (radio.value.startsWith("convert")) {
+      widthGroup.style.display = "block";
+    } else {
+      widthGroup.style.display = "none";
+    }
+  });
+});
+
+
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function highlightTextByLine(text, issues) {
+  const lines = text.split("\n");
+
+  // 行ごとに issues をまとめる
+  const issuesByLine = {};
+  issues.forEach((issue, index) => {
+    // 各issueに一意のIDを付与
+    issue.id = `issue-${index}`;
+    if (!issuesByLine[issue.line]) {
+      issuesByLine[issue.line] = [];
+    }
+    issuesByLine[issue.line].push(issue);
+  });
+
+  return lines.map((lineText, idx) => {
+    const lineNo = idx + 1;
+    const lineIssues = issuesByLine[lineNo];
+
+    if (!lineIssues) {
+      return escapeHtml(lineText);
+    }
+
+    // index 順に処理
+    lineIssues.sort((a, b) => a.index - b.index);
+
+    let result = "";
+    let last = 0;
+
+    lineIssues.forEach(issue => {
+      result += escapeHtml(lineText.slice(last, issue.index));
+
+      let cls = "";
+      if (issue.type === "jp-comma") {
+        cls = "highlight-jp-comma";
+      } else if (issue.type === "jp-period") {
+        cls = "highlight-jp-period";
+      } else if (issue.type === "en-comma-full") {
+        cls = "highlight-en-comma-full";
+      } else if (issue.type === "en-comma-half") {
+        cls = "highlight-en-comma-half";
+      } else if (issue.type === "en-period-full") {
+        cls = "highlight-en-period-full";
+      } else if (issue.type === "en-period-half") {
+        cls = "highlight-en-period-half";
+      }
+
+      result += `<span id="${issue.id}" class="${cls}" title="${issue.message}">${escapeHtml(lineText[issue.index])}</span>`;
+
+      last = issue.index + 1;
+    });
+
+    result += escapeHtml(lineText.slice(last));
+    return result;
+  }).join("\n");
+}
+
+// 差分計算機能
+function createDiffDisplay(originalText, convertedText, changes) {
+  if (!changes || changes.length === 0) {
+    return `<div class="diff-container">${escapeHtml(convertedText)}</div>`;
+  }
+
+  let result = '';
+  let lastIndex = 0;
+  let changeIndex = 0;
+  
+  // 変更情報を位置順でソート
+  const sortedChanges = [...changes].sort((a, b) => a.position - b.position);
+  
+  for (const change of sortedChanges) {
+    // 変更前の部分を追加
+    if (change.position > lastIndex) {
+      result += escapeHtml(convertedText.slice(lastIndex, change.position));
+    }
+    
+    // 変更された文字を追加（ツールチップ付き）
+    const changedChar = convertedText[change.position];
+    const tooltip = `${change.original} → ${change.converted}`;
+    result += `<span class="diff-changed" data-tooltip="${escapeHtml(tooltip)}">${escapeHtml(changedChar)}<span class="diff-tooltip">${escapeHtml(tooltip)}</span></span>`;
+    
+    lastIndex = change.position + 1;
+    changeIndex++;
+  }
+  
+  // 残りの部分を追加
+  if (lastIndex < convertedText.length) {
+    result += escapeHtml(convertedText.slice(lastIndex));
+  }
+  
+  return `<div class="diff-container">${result}</div>`;
+}
+
+// 文字レベルでの差分計算
+function calculateDiff(originalText, convertedText) {
+  const changes = [];
+  let originalIndex = 0;
+  let convertedIndex = 0;
+  
+  while (originalIndex < originalText.length && convertedIndex < convertedText.length) {
+    if (originalText[originalIndex] !== convertedText[convertedIndex]) {
+      changes.push({
+        position: convertedIndex,
+        original: originalText[originalIndex],
+        converted: convertedText[convertedIndex]
+      });
+    }
+    originalIndex++;
+    convertedIndex++;
+  }
+  
+  return changes;
+}
+
+document.getElementById("executeBtn").onclick = () => {
+  if (!inputText.value.trim()) {
+    alert("文章を入力してください");
+    return;
+  }
+  modal.style.display = "flex";
+};
+
+function closeModal() {
+  modal.style.display = "none";
+}
+
+function submitAction() {
+  const selected = document.querySelector('input[name="action"]:checked');
+  if (!selected) {
+    alert("操作を選択してください");
+    return;
+  }
+
+  const [mode, style] = selected.value.split("-");
+
+    let width = "auto";
+    if (mode === "convert") {
+        const selectedWidth = document.querySelector('input[name="width"]:checked');
+        if (selectedWidth) {
+            width = selectedWidth.value;
+        }
+    }
+
+  closeModal();
+
+  fetch("/api/punctuation/check", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text: inputText.value,
+      mode: mode,
+      style: style,
+      width: width
+    })
+  })
+  .then(res => {
+    // エラーレスポンスの処理
+    if (!res.ok) {
+      return res.json().then(errorData => {
+        throw new Error(errorData.detail || `サーバーエラー (${res.status})`);
+      });
+    }
+    return res.json();
+  })
+  .then(data => {
+    resultArea.style.display = "block";
+    resultTitle.textContent = `実行結果（${mode === "check" ? "チェック" : "変換"}）`;
+
+    // ===== チェックモード =====
+    if (mode === "check") {
+      if (!data.issues || data.issues.length === 0) {
+        // 右画面を非表示
+        rightScreen.classList.remove("show");
+        resultText.textContent = "✅ 問題は見つかりませんでした";
+        resultSummary.textContent = "";
+        statisticsArea.style.display = "none";
+        copyButton.style.display = "none";
+        // statsJumpButtonはCSSで制御されるのでJavaScriptでは触らない
+        statsJumpButton.style.display = "none"; // ジャンプボタンを非表示
+        return;
+      }
+
+      // 左画面：実行結果
+      resultText.innerHTML = highlightTextByLine(inputText.value, data.issues);
+      resultSummary.textContent = "";
+      statisticsArea.style.display = "none";
+      copyButton.style.display = "inline-block"; // コピーボタンを表示
+      // statsJumpButtonはCSSメディアクエリで制御
+
+      // 右画面を表示
+      rightScreen.classList.add("show");
+      
+      // 円グラフを作成
+      createPieChart(data.issues);
+      
+      // 元のデータを保存
+      originalIssues = data.issues;
+      currentFilter = null;
+
+      // 右画面：統計情報
+      if (data.statistics && data.statistics.length > 0) {
+        const statsHtml = data.statistics.map((stat, index) => {
+          const issueInfo = getIssueTypeFromStat(stat, data.issues);
+          const colorPoint = issueInfo.colorClass ? `<span class="stats-point ${issueInfo.colorClass}"></span>` : '';
+          return `<div class="stats-item" onclick="filterByType('${issueInfo.type}')">${colorPoint}• ${stat}</div>`;
+        }).join("");
+        rightStatsContent.innerHTML = statsHtml + '<button class="filter-reset" onclick="resetFilter()" style="display:none;">フィルターをリセット</button>';
+      } else {
+        rightStatsContent.innerHTML = '<div class="stats-item">統計情報なし</div>';
+      }
+
+      // 右画面：詳細情報（初期表示）
+      updateDetailInfo(data.issues);
+
+    }
+
+    // ===== 変換モード =====
+    else {
+      // 右画面を非表示
+      rightScreen.classList.remove("show");
+      
+      // バックエンドから変更情報を受け取った場合はそれを使用、そうでなければフロントエンドで計算
+      let changes = data.changes || calculateDiff(inputText.value, data.result_text);
+      
+      if (changes.length > 0) {
+        resultText.innerHTML = createDiffDisplay(inputText.value, data.result_text, changes);
+      } else {
+        resultText.innerHTML = `<div class="diff-container">${escapeHtml(data.result_text)}</div>`;
+      }
+      
+      statisticsArea.style.display = "none";
+      copyButton.style.display = "inline-block"; // コピーボタンを表示
+      // statsJumpButtonはCSSで非表示に固定されている
+      statsJumpButton.style.display = "none"; // 統計ジャンプボタンを非表示
+
+      if (data.summary.total_changes > 0) {
+        resultSummary.innerHTML = `<div class="diff-summary">✅ ${data.summary.total_changes} 箇所を変換しました（変更箇所は青色でハイライト表示されます。マウスオーバーで詳細を確認できます）</div>`;
+      } else {
+        resultSummary.innerHTML = `<div class="diff-summary">ℹ️ 変換の必要はありませんでした</div>`;
+      }
+    }
+  })
+  .catch((error) => {
+    resultArea.style.display = "block";
+    resultTitle.textContent = "エラー";
+    
+    // 右画面を非表示
+    rightScreen.classList.remove("show");
+    
+    // エラーメッセージを表示
+    if (error.message) {
+      resultText.textContent = `⚠️ ${error.message}`;
+    } else {
+      resultText.textContent = "サーバーに接続できませんでした。";
+    }
+    
+    resultSummary.textContent = "";
+    copyButton.style.display = "none"; // エラー時はコピーボタンを非表示
+    // statsJumpButtonはCSSで非表示に固定されている
+    statisticsArea.style.display = "none";
+  });
+}
+
+// 詳細情報クリック時のジャンプ機能
+function jumpToIssue(issueId) {
+  const targetElement = document.getElementById(issueId);
+  if (!targetElement) return;
+  
+  // 既存のハイライトを削除
+  document.querySelectorAll('.highlight-target').forEach(el => {
+    el.classList.remove('highlight-target');
+  });
+  
+  // 新しいハイライトを追加
+  targetElement.classList.add('highlight-target');
+  
+  // 要素にスクロール
+  targetElement.scrollIntoView({
+    behavior: 'smooth',
+    block: 'center'
+  });
+  
+  // 2秒後にハイライトを削除
+  setTimeout(() => {
+    targetElement.classList.remove('highlight-target');
+  }, 2000);
+}
+
+// グローバル変数で元のデータを保持
+let originalIssues = [];
+let currentFilter = null;
+
+// 統計情報からissueタイプとカラークラスを取得する関数
+function getIssueTypeFromStat(stat, issues) {
+  if (stat.includes('日本語の読点')) return { type: 'jp-comma', colorClass: 'jp-comma' };
+  if (stat.includes('日本語の句点')) return { type: 'jp-period', colorClass: 'jp-period' };
+  if (stat.includes('英語のコンマ（全角')) return { type: 'en-comma-full', colorClass: 'en-comma-full' };
+  if (stat.includes('英語のコンマ（半角')) return { type: 'en-comma-half', colorClass: 'en-comma-half' };
+  if (stat.includes('英語のピリオド（全角')) return { type: 'en-period-full', colorClass: 'en-period-full' };
+  if (stat.includes('英語のピリオド（半角')) return { type: 'en-period-half', colorClass: 'en-period-half' };
+  return { type: null, colorClass: null };
+}
+
+// 円グラフを描画する関数
+function createPieChart(issues) {
+  // 各句読点のカウント
+  const counts = {
+    'jp-comma': 0,
+    'jp-period': 0,
+    'en-comma-full': 0,
+    'en-comma-half': 0,
+    'en-period-full': 0,
+    'en-period-half': 0
+  };
+  
+  issues.forEach(issue => {
+    if (counts.hasOwnProperty(issue.type)) {
+      counts[issue.type]++;
+    }
+  });
+  
+  const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+  
+  if (total === 0) {
+    pieChart.innerHTML = '<circle cx="21" cy="21" r="15" fill="#e0e0e0"/>';
+    chartLegend.innerHTML = 'データなし';
+    return;
+  }
+  
+  // 色の定義
+  const colors = {
+    'jp-comma': '#f0ad4e',
+    'jp-period': '#28a745',
+    'en-comma-full': '#17a2b8',
+    'en-comma-half': '#dc3545',
+    'en-period-full': '#6f42c1',
+    'en-period-half': '#fd7e14'
+  };
+  
+  const labels = {
+    'jp-comma': '、',
+    'jp-period': '。',
+    'en-comma-full': '，',
+    'en-comma-half': ',',
+    'en-period-full': '．',
+    'en-period-half': '.'
+  };
+  
+  let cumulativePercentage = 0;
+  let svgContent = '';
+  let legendContent = '';
+  
+  Object.entries(counts).forEach(([type, count]) => {
+    if (count > 0) {
+      const percentage = count / total;
+      const startAngle = cumulativePercentage * 360;
+      const endAngle = (cumulativePercentage + percentage) * 360;
+      
+      // SVGのパスを作成
+      const x1 = 21 + 15.915 * Math.cos((startAngle - 90) * Math.PI / 180);
+      const y1 = 21 + 15.915 * Math.sin((startAngle - 90) * Math.PI / 180);
+      const x2 = 21 + 15.915 * Math.cos((endAngle - 90) * Math.PI / 180);
+      const y2 = 21 + 15.915 * Math.sin((endAngle - 90) * Math.PI / 180);
+      
+      const largeArcFlag = percentage > 0.5 ? 1 : 0;
+      
+      if (percentage === 1) {
+        // 全円の場合
+        svgContent += `<circle cx="21" cy="21" r="15.915" fill="${colors[type]}"/>`;
+      } else {
+        // 円弧の場合
+        svgContent += `<path d="M 21 21 L ${x1} ${y1} A 15.915 15.915 0 ${largeArcFlag} 1 ${x2} ${y2} Z" fill="${colors[type]}"/>`;
+      }
+      
+      // 凡例を作成
+      legendContent += `<div class="legend-item"><div class="legend-dot" style="background-color: ${colors[type]}"></div><span>${labels[type]}(${count})</span></div>`;
+      
+      cumulativePercentage += percentage;
+    }
+  });
+  
+  pieChart.innerHTML = svgContent;
+  chartLegend.innerHTML = legendContent;
+}
+
+// タイプ別にフィルタリング
+function filterByType(issueType) {
+  if (!originalIssues.length) return;
+  
+  currentFilter = issueType;
+  const filteredIssues = originalIssues.filter(issue => issue.type === issueType);
+  
+  // 統計情報のハイライト
+  document.querySelectorAll('.stats-item').forEach(item => {
+    item.classList.remove('filtered');
+    if (item.onclick && item.onclick.toString().includes(issueType)) {
+      item.classList.add('filtered');
+    }
+  });
+  
+  // フィルターリセットボタンを表示
+  const resetBtn = document.querySelector('.filter-reset');
+  if (resetBtn) resetBtn.style.display = 'inline-block';
+  
+  // 詳細情報を更新
+  updateDetailInfo(filteredIssues, issueType);
+}
+
+// フィルターをリセット
+function resetFilter() {
+  currentFilter = null;
+  
+  // 統計情報のハイライトを削除
+  document.querySelectorAll('.stats-item').forEach(item => {
+    item.classList.remove('filtered');
+  });
+  
+  // フィルターリセットボタンを非表示
+  const resetBtn = document.querySelector('.filter-reset');
+  if (resetBtn) resetBtn.style.display = 'none';
+  
+  // 元の詳細情報を表示
+  updateDetailInfo(originalIssues);
+}
+
+// 詳細情報を更新する関数
+function updateDetailInfo(issues, filterType = null) {
+  const rightSummaryContent = document.getElementById('rightSummaryContent');
+  
+  if (filterType) {
+    const typeNames = {
+      'jp-comma': '日本語の読点（、）',
+      'jp-period': '日本語の句点（。）',
+      'en-comma-full': '英語のコンマ（全角：，）',
+      'en-comma-half': '英語のコンマ（半角：,）',
+      'en-period-full': '英語のピリオド（全角：．）',
+      'en-period-half': '英語のピリオド（半角：.）'
+    };
+    
+    rightSummaryContent.innerHTML = `
+      <div style="margin-bottom: 15px; font-weight: 500;">
+        ⚠ ${issues.length} 箇所の${typeNames[filterType]}が見つかりました
+      </div>
+      <div class="issue-detail">
+          ${issues.map((i, index) =>
+          `<div class="issue-item" onclick="jumpToIssue('${i.id}')">
+            • ${i.message}（${i.line}行目）
+          </div>`
+          ).join("")}
+      </div>
+    `;
+  } else {
+    rightSummaryContent.innerHTML = `
+      <div style="margin-bottom: 15px; font-weight: 500;">
+        ⚠ ${issues.length} 箇所の句読点が見つかりました
+      </div>
+      <div class="issue-detail">
+          ${issues.map((i, index) =>
+          `<div class="issue-item" onclick="jumpToIssue('${i.id}')">
+            • ${i.message}（${i.line}行目）
+          </div>`
+          ).join("")}
+      </div>
+    `;
+  }
+}
+
+// 統計情報へジャンプする機能（モバイル用）
+function jumpToStats() {
+  const rightScreen = document.getElementById('rightScreen');
+  if (rightScreen && rightScreen.classList.contains('show')) {
+    rightScreen.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start'
+    });
+  }
+}
+
+// 統計情報へジャンプする機能（モバイル用）
+function jumpToStats() {
+  const rightScreen = document.getElementById('rightScreen');
+  if (rightScreen && rightScreen.classList.contains('show')) {
+    rightScreen.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start'
+    });
+  }
+}
+
+// 実行結果をコピーする機能
+async function copyResultText() {
+  const resultTextElement = document.getElementById('resultText');
+  const copyButtonElement = document.getElementById('copyButton');
+  
+  try {
+    // HTMLタグを除去してプレーンテキストを取得
+    const textToCopy = resultTextElement.innerText || resultTextElement.textContent;
+    
+    // クリップボードにコピー
+    await navigator.clipboard.writeText(textToCopy);
+    
+    // 成功時のフィードバック
+    const originalText = copyButtonElement.textContent;
+    copyButtonElement.textContent = 'コピー完了!';
+    copyButtonElement.classList.add('success');
+    
+    // 2秒後に元に戻す
+    setTimeout(() => {
+      copyButtonElement.textContent = originalText;
+      copyButtonElement.classList.remove('success');
+    }, 2000);
+    
+  } catch (err) {
+    // エラー時のフィードバック
+    console.error('コピーに失敗しました:', err);
+    const originalText = copyButtonElement.textContent;
+    copyButtonElement.textContent = 'コピー失敗';
+    
+    setTimeout(() => {
+      copyButtonElement.textContent = originalText;
+    }, 2000);
+  }
+}
+</script>
+
+</body>
+</html>
