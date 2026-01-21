@@ -120,6 +120,12 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
                     "session_id": session_id
                 }
                 
+                # Stripeメタデータからフィンガープリント情報を取得
+                stripe_metadata = session.get('metadata', {})
+                fingerprint = stripe_metadata.get('fingerprint')
+                payment_ip = stripe_metadata.get('ip')
+                payment_user_agent = stripe_metadata.get('user_agent')
+                
                 # データベースにサブスクリプション情報を記録
                 subscription = SubscriptionService.create_subscription(
                     db=db,
@@ -127,7 +133,10 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
                     stripe_customer_id=customer_id,
                     stripe_subscription_id=subscription_id,
                     stripe_session_id=session_id,
-                    metadata_dict=metadata
+                    metadata_dict=metadata,
+                    fingerprint=fingerprint,
+                    payment_ip=payment_ip,
+                    payment_user_agent=payment_user_agent
                 )
                 
                 # 確実にプレミアム状態にする
@@ -234,61 +243,108 @@ def get_user_key(request: Request, response: Response):
     
     return user_id
 
-def find_user_by_fingerprint(db: Session, request: Request) -> Optional[str]:
-    """フィンガープリントベースでユーザーを検索"""
+def create_fingerprint(request: Request) -> str:
+    """ブラウザフィンガープリントを生成"""
     client_ip = request.client.host
     user_agent = request.headers.get("user-agent", "")
-    fingerprint = hashlib.md5(f"{client_ip}:{user_agent}".encode()).hexdigest()[:16]
+    return hashlib.md5(f"{client_ip}:{user_agent}".encode()).hexdigest()[:16]
+
+def find_user_by_fingerprint(db: Session, request: Request) -> Optional[str]:
+    """フィンガープリントベースでユーザーを検索（改善版）"""
+    fingerprint = create_fingerprint(request)
+    print(f"Searching for user with fingerprint: {fingerprint}")
     
-    # 同じフィンガープリントでアクティブなサブスクリプションを持つユーザーを検索
+    # まず、Userテーブルから直接検索（プレミアムユーザーのみ）
+    premium_user = db.query(User).filter(
+        User.browser_fingerprint == fingerprint,
+        User.is_premium == True
+    ).first()
+    
+    if premium_user:
+        print(f"Found premium user in User table: {premium_user.user_key}")
+        return premium_user.user_key
+    
+    # 次に、アクティブなサブスクリプションから検索
     subscription = db.query(Subscription).filter(
-        Subscription.is_active == True,
-        Subscription.meta_data.contains(f'"fingerprint":"{fingerprint}"')
+        Subscription.browser_fingerprint == fingerprint,
+        Subscription.is_active == True
     ).first()
     
     if subscription:
-        print(f"Found existing premium user by fingerprint: {subscription.user_key}")
+        print(f"Found premium user in Subscription table: {subscription.user_key}")
         return subscription.user_key
     
+    print("No premium user found with this fingerprint")
     return None
 
-def enhanced_get_user_key(request: Request, response: Response, db: Session):
-    """拡張ユーザー識別（サブスクリプション復元対応）"""
-    # 通常のCookieベース識別
-    user_id = request.cookies.get("uid")
-    
-    # Cookieがない場合、フィンガープリントでプレミアムユーザーを検索
-    if not user_id:
-        existing_user = find_user_by_fingerprint(db, request)
-        if existing_user:
-            # プレミアムユーザーが見つかった場合、そのユーザーIDを使用
-            user_id = existing_user
-            response.set_cookie(
-                key="uid",
-                value=user_id,
-                max_age=60*60*24*365,
-                httponly=True,
-                samesite="lax",
-                secure=True if request.url.scheme == "https" else False
-            )
-            print(f"Restored premium user from fingerprint: {user_id}")
-        else:
-            # 新規ユーザー
-            user_id = str(uuid.uuid4())
-            response.set_cookie(
-                key="uid",
-                value=user_id,
-                max_age=60*60*24*365,
-                httponly=True,
-                samesite="lax",
-                secure=True if request.url.scheme == "https" else False
-            )
-    
-    # フィンガープリント情報を保存
+def update_user_fingerprint(db: Session, user_key: str, request: Request):
+    """ユーザーのフィンガープリント情報を更新"""
+    fingerprint = create_fingerprint(request)
     client_ip = request.client.host
     user_agent = request.headers.get("user-agent", "")
-    fingerprint = hashlib.md5(f"{client_ip}:{user_agent}".encode()).hexdigest()[:16]
     
+    user = db.query(User).filter(User.user_key == user_key).first()
+    if user:
+        user.browser_fingerprint = fingerprint
+        user.last_ip = client_ip
+        user.last_user_agent = user_agent
+        user.last_seen = datetime.utcnow()
+        db.commit()
+        print(f"Updated fingerprint for user {user_key}: {fingerprint}")
+
+def enhanced_get_user_key(request: Request, response: Response, db: Session) -> str:
+    """拡張ユーザー識別（大幅改善版）"""
+    # 通常のCookieベース識別
+    user_id = request.cookies.get("uid")
+    fingerprint = create_fingerprint(request)
+    
+    print(f"=== Enhanced User Identification ===")
+    print(f"Cookie user_id: {user_id}")
+    print(f"Current fingerprint: {fingerprint}")
+    
+    # Cookieがある場合の処理
+    if user_id:
+        print(f"Cookie found: {user_id}")
+        # フィンガープリント情報を更新
+        update_user_fingerprint(db, user_id, request)
+        return user_id
+    
+    # Cookieがない場合、フィンガープリントでプレミアムユーザーを検索
+    existing_user = find_user_by_fingerprint(db, request)
+    
+    if existing_user:
+        # プレミアムユーザーが見つかった場合、そのユーザーIDを復元
+        user_id = existing_user
+        print(f"Restored premium user from fingerprint: {user_id}")
+        
+        # Cookieを再設定
+        response.set_cookie(
+            key="uid",
+            value=user_id,
+            max_age=60*60*24*365,
+            httponly=True,
+            samesite="lax",
+            secure=True if request.url.scheme == "https" else False
+        )
+        
+        # フィンガープリント情報も更新
+        update_user_fingerprint(db, user_id, request)
+        
+    else:
+        # 新規ユーザー
+        user_id = str(uuid.uuid4())
+        print(f"Creating new user: {user_id}")
+        
+        response.set_cookie(
+            key="uid",
+            value=user_id,
+            max_age=60*60*24*365,
+            httponly=True,
+            samesite="lax",
+            secure=True if request.url.scheme == "https" else False
+        )
+    
+    # フィンガープリント情報Cookie（デバッグ用）
     response.set_cookie(
         key="ufp",
         value=fingerprint,
@@ -297,6 +353,9 @@ def enhanced_get_user_key(request: Request, response: Response, db: Session):
         samesite="lax",
         secure=True if request.url.scheme == "https" else False
     )
+    
+    print(f"Final user_id: {user_id}")
+    print("=== End User Identification ===")
     
     return user_id
 
@@ -325,9 +384,9 @@ def create_checkout_session(request: Request, response: Response, db: Session = 
         user_key = enhanced_get_user_key(request, response, db)
         
         # フィンガープリント情報を生成
+        fingerprint = create_fingerprint(request)
         client_ip = request.client.host
         user_agent = request.headers.get("user-agent", "")
-        fingerprint = hashlib.md5(f"{client_ip}:{user_agent}".encode()).hexdigest()[:16]
         
         print(f"Creating checkout session for user: {user_key}")
         print(f"User fingerprint: {fingerprint}")
@@ -522,26 +581,55 @@ def debug_user_status(request: Request, response: Response, db: Session = Depend
     if not DEBUG_MODE:
         raise HTTPException(status_code=404, detail="Not found")
     
-    user_key = get_user_key(request, response)
-    user = UserService.get_or_create_user(db, user_key)
+    user_key = enhanced_get_user_key(request, response, db)
+    fingerprint = create_fingerprint(request)
+    
+    user = db.query(User).filter(User.user_key == user_key).first()
     is_premium = SubscriptionService.is_user_premium(db, user_key)
     active_sub = SubscriptionService.get_active_subscription(db, user_key)
     usage_info = UserService.get_usage_info(db, user_key, USAGE_LIMIT)
     
+    # 同じフィンガープリントの他のユーザーも検索
+    other_users = db.query(User).filter(
+        User.browser_fingerprint == fingerprint,
+        User.user_key != user_key
+    ).all()
+    
+    other_subscriptions = db.query(Subscription).filter(
+        Subscription.browser_fingerprint == fingerprint,
+        Subscription.user_key != user_key
+    ).all()
+    
     return {
-        "user_key": user_key,
-        "user_id": user.id,
-        "is_premium_db": user.is_premium,
-        "is_premium_service": is_premium,
-        "daily_usage_count": user.daily_usage_count,
-        "daily_usage_date": user.daily_usage_date,
+        "current_user": {
+            "user_key": user_key,
+            "user_id": user.id if user else None,
+            "is_premium_db": user.is_premium if user else False,
+            "is_premium_service": is_premium,
+            "daily_usage_count": user.daily_usage_count if user else 0,
+            "daily_usage_date": user.daily_usage_date if user else None,
+            "browser_fingerprint": user.browser_fingerprint if user else None,
+            "last_ip": user.last_ip if user else None,
+        },
+        "current_request": {
+            "fingerprint": fingerprint,
+            "ip": request.client.host,
+            "user_agent": request.headers.get("user-agent", "")[:100]
+        },
         "usage_info": usage_info,
         "active_subscription": {
             "id": active_sub.id if active_sub else None,
             "stripe_subscription_id": active_sub.stripe_subscription_id if active_sub else None,
             "is_active": active_sub.is_active if active_sub else None,
-            "created_at": active_sub.created_at.isoformat() if active_sub and active_sub.created_at else None
-        } if active_sub else None
+            "browser_fingerprint": active_sub.browser_fingerprint if active_sub else None,
+            "payment_ip": active_sub.payment_ip if active_sub else None,
+        } if active_sub else None,
+        "fingerprint_matches": {
+            "other_users": len(other_users),
+            "other_subscriptions": len(other_subscriptions),
+            "users_detail": [{"user_key": u.user_key, "is_premium": u.is_premium} for u in other_users],
+            "subscriptions_detail": [{"user_key": s.user_key, "is_active": s.is_active} for s in other_subscriptions]
+        }
     }
 
 @app.post("/api/debug/reset")

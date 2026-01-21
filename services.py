@@ -6,20 +6,29 @@ from typing import Optional
 
 class UserService:
     @staticmethod
-    def get_or_create_user(db: Session, user_key: str) -> User:
-        """ユーザーを取得または作成"""
+    def get_or_create_user(db: Session, user_key: str, fingerprint: str = None, ip: str = None, user_agent: str = None) -> User:
+        """ユーザーを取得または作成（フィンガープリント対応）"""
         user = db.query(User).filter(User.user_key == user_key).first()
         if not user:
             user = User(
                 user_key=user_key,
                 daily_usage_date=date.today().isoformat(),
-                daily_usage_count=0
+                daily_usage_count=0,
+                browser_fingerprint=fingerprint,
+                last_ip=ip,
+                last_user_agent=user_agent
             )
             db.add(user)
             db.commit()
             db.refresh(user)
         else:
-            # 最終アクセス日時を更新
+            # 既存ユーザーの場合、フィンガープリント情報を更新
+            if fingerprint:
+                user.browser_fingerprint = fingerprint
+            if ip:
+                user.last_ip = ip
+            if user_agent:
+                user.last_user_agent = user_agent
             user.last_seen = datetime.utcnow()
             db.commit()
         
@@ -103,11 +112,14 @@ class SubscriptionService:
         stripe_customer_id: str = None,
         stripe_subscription_id: str = None,
         stripe_session_id: str = None,
-        metadata_dict: dict = None
+        metadata_dict: dict = None,
+        fingerprint: str = None,
+        payment_ip: str = None,
+        payment_user_agent: str = None
     ) -> Subscription:
-        """サブスクリプションを作成"""
+        """サブスクリプションを作成（フィンガープリント対応）"""
         # ユーザーを取得または作成
-        user = UserService.get_or_create_user(db, user_key)
+        user = UserService.get_or_create_user(db, user_key, fingerprint, payment_ip, payment_user_agent)
         
         # 既存のアクティブなサブスクリプションがあるかチェック
         existing = db.query(Subscription).filter(
@@ -120,8 +132,17 @@ class SubscriptionService:
             existing.stripe_customer_id = stripe_customer_id or existing.stripe_customer_id
             existing.stripe_subscription_id = stripe_subscription_id or existing.stripe_subscription_id
             existing.stripe_session_id = stripe_session_id or existing.stripe_session_id
-            existing.is_active = True  # 確実にアクティブ状態を設定
+            existing.is_active = True
             existing.updated_at = datetime.utcnow()
+            
+            # フィンガープリント情報を更新
+            if fingerprint:
+                existing.browser_fingerprint = fingerprint
+            if payment_ip:
+                existing.payment_ip = payment_ip
+            if payment_user_agent:
+                existing.payment_user_agent = payment_user_agent
+                
             if metadata_dict:
                 existing.meta_data = json.dumps(metadata_dict)
         else:
@@ -132,7 +153,10 @@ class SubscriptionService:
                 stripe_customer_id=stripe_customer_id,
                 stripe_subscription_id=stripe_subscription_id,
                 stripe_session_id=stripe_session_id,
-                is_active=True,  # 明示的にアクティブ状態を設定
+                is_active=True,
+                browser_fingerprint=fingerprint,
+                payment_ip=payment_ip,
+                payment_user_agent=payment_user_agent,
                 meta_data=json.dumps(metadata_dict) if metadata_dict else None
             )
             db.add(existing)

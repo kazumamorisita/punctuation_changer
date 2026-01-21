@@ -29,6 +29,11 @@ class User(Base):
     
     # プレミアム状態
     is_premium = Column(Boolean, default=False)
+    
+    # ユーザー識別用フィンガープリント情報
+    browser_fingerprint = Column(String, index=True)  # IP + User-Agent のハッシュ
+    last_ip = Column(String)
+    last_user_agent = Column(String)
 
 class Subscription(Base):
     __tablename__ = "subscriptions"
@@ -44,6 +49,11 @@ class Subscription(Base):
     
     # 状態管理
     plan_type = Column(String, default="premium")
+    
+    # ユーザー識別用フィンガープリント情報（バックアップ）
+    browser_fingerprint = Column(String, index=True)  # 決済時のフィンガープリント
+    payment_ip = Column(String)  # 決済時のIP
+    payment_user_agent = Column(String)  # 決済時のUser-Agent
     
     # メタデータ（JSON形式）- metadataは予約語なのでmeta_dataに変更
     meta_data = Column(Text)
