@@ -1288,16 +1288,37 @@ function closeUpgradeModal() {
 }
 
 function goToPayment() {
+  console.log("Starting payment process...");
+  
   fetch("/api/create-checkout-session", {
-    method: "POST"
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    }
   })
-  .then(res => res.json())
+  .then(response => {
+    console.log("Checkout session response status:", response.status);
+    
+    if (!response.ok) {
+      return response.json().then(errorData => {
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      });
+    }
+    return response.json();
+  })
   .then(data => {
+    console.log("Checkout session data:", data);
+    
     if (data.url) {
+      console.log("Redirecting to:", data.url);
       window.location.href = data.url;
     } else {
-      alert("決済開始に失敗しました");
+      throw new Error("決済URLが取得できませんでした");
     }
+  })
+  .catch(error => {
+    console.error("Payment error:", error);
+    alert(`決済処理でエラーが発生しました: ${error.message}`);
   });
 }
 

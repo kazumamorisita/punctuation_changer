@@ -33,6 +33,10 @@ if not stripe.api_key:
 
 # アプリケーション設定
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:8000")
+# Render環境の自動検出とHTTPS化
+if not BASE_URL.startswith(("http://", "https://")):
+    BASE_URL = f"https://{BASE_URL}"
+
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 DEBUG_MODE = os.environ.get("DEBUG", "False").lower() == "true"
 
@@ -215,6 +219,10 @@ def create_checkout_session(request: Request, response: Response):
         # ユーザー識別
         user_key = get_user_key(request, response)
         
+        print(f"Creating checkout session for user: {user_key}")
+        print(f"BASE_URL: {BASE_URL}")
+        print(f"Stripe API Key configured: {bool(stripe.api_key)}")
+        
         session = stripe.checkout.Session.create(
             payment_method_types=["card"],
             mode="subscription",
@@ -238,7 +246,18 @@ def create_checkout_session(request: Request, response: Response):
                 "plan": "premium"
             }
         )
+        
+        print(f"Checkout session created: {session.id}")
+        print(f"Redirecting to: {session.url}")
+        
         return JSONResponse({"url": session.url})
+        
+    except stripe.error.InvalidRequestError as e:
+        print(f"Stripe InvalidRequestError: {str(e)}")
+        return JSONResponse({"error": f"リクエストエラー: {str(e)}"}, status_code=400)
+    except stripe.error.AuthenticationError as e:
+        print(f"Stripe AuthenticationError: {str(e)}")
+        return JSONResponse({"error": "Stripe認証エラーが発生しました"}, status_code=500)
     except stripe.error.StripeError as e:
         print(f"Stripe error: {str(e)}")
         return JSONResponse({"error": "決済システムでエラーが発生しました"}, status_code=400)
@@ -333,6 +352,18 @@ def get_usage(request: Request, response: Response, db: Session = Depends(get_db
     usage_info = get_usage_info(user_key, db)
     print(f"Debug: User key: {user_key}, Usage info: {usage_info}")
     return usage_info
+
+@app.get("/api/debug/config")
+def debug_config():
+    """デバッグ用：環境設定の確認"""
+    return {
+        "base_url": BASE_URL,
+        "stripe_configured": bool(stripe.api_key),
+        "stripe_key_prefix": stripe.api_key[:7] + "..." if stripe.api_key else None,
+        "webhook_secret_configured": bool(STRIPE_WEBHOOK_SECRET),
+        "debug_mode": DEBUG_MODE,
+        "environment": os.environ.get("RENDER", "local")
+    }
 
 @app.get("/api/debug/usage")
 def debug_usage(db: Session = Depends(get_db)):
