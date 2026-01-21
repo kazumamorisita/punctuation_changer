@@ -94,6 +94,12 @@ def reset_usage(request: Request, response: Response):
         del usage_store[user_key]
     return {"message": f"Usage reset for user: {user_key}"}
 
+@app.post("/api/debug/clear-all")
+def clear_all_usage():
+    """デバッグ用：全ユーザーの利用回数をクリア"""
+    usage_store.clear()
+    return {"message": "All usage data cleared"}
+
 # =========================
 # Request Model
 # =========================
