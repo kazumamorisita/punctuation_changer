@@ -718,6 +718,63 @@ def recreate_database():
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+@app.post("/api/debug/create-test-premium")
+def create_test_premium_user(request: Request, db: Session = Depends(get_db)):
+    """テスト用：現在のユーザーをプレミアムに設定"""
+    try:
+        # 現在のユーザー情報を取得
+        user_key = request.cookies.get("uid")
+        if not user_key:
+            return {"success": False, "error": "No user cookie found"}
+        
+        fingerprint = create_fingerprint(request) if FINGERPRINT_ENABLED else None
+        
+        # ユーザーを取得または作成
+        user = UserService.get_or_create_user(
+            db=db, 
+            user_key=user_key,
+            fingerprint=fingerprint,
+            ip=request.client.host,
+            user_agent=request.headers.get("user-agent", "")
+        )
+        
+        # プレミアム状態に設定
+        user.is_premium = True
+        
+        # テスト用サブスクリプションを作成
+        subscription = SubscriptionService.create_subscription(
+            db=db,
+            user_key=user_key,
+            stripe_customer_id="test_customer",
+            stripe_subscription_id="test_sub_" + user_key[:8],
+            stripe_session_id="test_session",
+            fingerprint=fingerprint,
+            payment_ip=request.client.host,
+            payment_user_agent=request.headers.get("user-agent", "")
+        )
+        
+        return {
+            "success": True, 
+            "message": f"User {user_key} set to premium",
+            "fingerprint": fingerprint,
+            "subscription_id": subscription.id
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.get("/api/debug/recreate-db-get")
+def recreate_database_get():
+    """緊急用：データベースを新しいスキーマで再作成（GET版）"""
+    try:
+        from database import Base, engine
+        # 全テーブルを削除
+        Base.metadata.drop_all(bind=engine)
+        # 新しいスキーマでテーブルを再作成
+        Base.metadata.create_all(bind=engine)
+        return {"success": True, "message": "Database recreated with new schema (GET method)"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 # =========================
 # Request Model
 # =========================
