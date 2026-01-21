@@ -33,9 +33,23 @@ if not stripe.api_key:
 
 # アプリケーション設定
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:8000")
+
 # Render環境の自動検出とHTTPS化
+if "RENDER" in os.environ:
+    # Render環境の場合、RENDER_EXTERNAL_URLを優先使用
+    render_url = os.environ.get("RENDER_EXTERNAL_URL")
+    if render_url:
+        BASE_URL = render_url
+    elif not BASE_URL.startswith("https://"):
+        # BASE_URLがHTTPSでない場合、アプリ名からHTTPS URLを推測
+        app_name = os.environ.get("RENDER_SERVICE_NAME", "punctuation-checker")
+        BASE_URL = f"https://{app_name}.onrender.com"
+
+# 念のため、既存のURL形式も補正
 if not BASE_URL.startswith(("http://", "https://")):
     BASE_URL = f"https://{BASE_URL}"
+
+print(f"Application BASE_URL: {BASE_URL}")
 
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 DEBUG_MODE = os.environ.get("DEBUG", "False").lower() == "true"
@@ -358,11 +372,15 @@ def debug_config():
     """デバッグ用：環境設定の確認"""
     return {
         "base_url": BASE_URL,
+        "base_url_env": os.environ.get("BASE_URL"),
+        "render_external_url": os.environ.get("RENDER_EXTERNAL_URL"),
+        "render_service_name": os.environ.get("RENDER_SERVICE_NAME"),
+        "is_render": "RENDER" in os.environ,
         "stripe_configured": bool(stripe.api_key),
         "stripe_key_prefix": stripe.api_key[:7] + "..." if stripe.api_key else None,
         "webhook_secret_configured": bool(STRIPE_WEBHOOK_SECRET),
         "debug_mode": DEBUG_MODE,
-        "environment": os.environ.get("RENDER", "local")
+        "all_env_vars": {k: v for k, v in os.environ.items() if k.startswith(('RENDER', 'BASE'))}
     }
 
 @app.get("/api/debug/usage")
