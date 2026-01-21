@@ -4,6 +4,10 @@
 .env.production
 .env.development
 
+# Database files
+*.db
+punctuation_checker.db
+
 # Python
 __pycache__/
 *.py[cod]

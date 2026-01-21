@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from pydantic import BaseModel
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -9,9 +9,19 @@ from fastapi import Response
 import stripe
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
+from sqlalchemy.orm import Session
+from database import get_db, init_db, User, Subscription
+from services import UserService, SubscriptionService
+from datetime import datetime
+import json
+import hashlib
+import hmac
 
 # 環境変数の読み込み
 load_dotenv()
+
+# データベース初期化
+init_db()
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
@@ -25,16 +35,6 @@ if not stripe.api_key:
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:8000")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 DEBUG_MODE = os.environ.get("DEBUG", "False").lower() == "true"
-# Stripe Webhook用のインポート追加
-import json
-import hashlib
-import hmac
-
-# STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
-# の後に以下を追加
-
-# ユーザーのサブスクリプション状態を管理（本番では Database を推奨）
-user_subscriptions = {}
 
 def verify_webhook_signature(payload: bytes, sig_header: str, webhook_secret: str) -> bool:
     """Webhook署名を検証"""
@@ -69,8 +69,8 @@ def verify_webhook_signature(payload: bytes, sig_header: str, webhook_secret: st
         return False
 
 @app.post("/webhook/stripe")
-async def stripe_webhook(request: Request):
-    """Stripe Webhookエンドポイント"""
+async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
+    """Stripe Webhookエンドポイント - データベース統合版"""
     payload = await request.body()
     sig_header = request.headers.get('stripe-signature', '')
     
@@ -82,19 +82,37 @@ async def stripe_webhook(request: Request):
         event = json.loads(payload.decode('utf-8'))
         print(f"Received webhook: {event['type']}")
         
-        # サブスクリプション作成時
+        # サブスクリプション作成時（チェックアウト完了）
         if event['type'] == 'checkout.session.completed':
             session = event['data']['object']
             user_key = session.get('client_reference_id')
-            subscription_id = session.get('subscription')
             
-            if user_key and subscription_id:
-                user_subscriptions[user_key] = {
-                    "subscription_id": subscription_id,
-                    "status": "active",
-                    "created_at": date.today().isoformat()
-                }
-                print(f"User {user_key} subscribed with {subscription_id}")
+            if user_key:
+                # Stripeから詳細情報を取得
+                subscription_id = session.get('subscription')
+                customer_id = session.get('customer')
+                session_id = session['id']
+                
+                # データベースにサブスクリプション情報を記録
+                subscription = SubscriptionService.create_subscription(
+                    db=db,
+                    user_key=user_key,
+                    stripe_customer_id=customer_id,
+                    stripe_subscription_id=subscription_id,
+                    stripe_session_id=session_id,
+                    metadata_dict={
+                        "plan": "premium",
+                        "payment_status": session.get('payment_status'),
+                        "amount_total": session.get('amount_total')
+                    }
+                )
+                
+                # 確実にプレミアム状態にする
+                user = UserService.get_or_create_user(db, user_key)
+                user.is_premium = True
+                db.commit()
+                
+                print(f"User {user_key} subscribed with {subscription_id} - Premium activated")
         
         # サブスクリプション更新時
         elif event['type'] == 'customer.subscription.updated':
@@ -102,24 +120,43 @@ async def stripe_webhook(request: Request):
             subscription_id = subscription['id']
             status = subscription['status']
             
-            # user_keyでの逆引きが必要（本番ではDBで管理推奨）
-            for user_key, sub_info in user_subscriptions.items():
-                if sub_info.get("subscription_id") == subscription_id:
-                    user_subscriptions[user_key]["status"] = status
-                    print(f"Updated subscription {subscription_id} status to {status}")
-                    break
+            # サブスクリプションIDからユーザーを特定
+            existing_sub = db.query(Subscription).filter(
+                Subscription.stripe_subscription_id == subscription_id
+            ).first()
+            
+            if existing_sub:
+                if status in ['active', 'trialing']:
+                    existing_sub.is_active = True
+                else:
+                    existing_sub.is_active = False
+                
+                existing_sub.updated_at = datetime.utcnow()
+                db.commit()
+                print(f"Updated subscription {subscription_id} status to {status}")
         
         # サブスクリプション削除時
         elif event['type'] == 'customer.subscription.deleted':
             subscription = event['data']['object']
             subscription_id = subscription['id']
             
-            # user_keyでの逆引きが必要
-            for user_key, sub_info in user_subscriptions.items():
-                if sub_info.get("subscription_id") == subscription_id:
-                    user_subscriptions[user_key]["status"] = "cancelled"
-                    print(f"Cancelled subscription {subscription_id}")
-                    break
+            # サブスクリプションを無効化
+            existing_sub = db.query(Subscription).filter(
+                Subscription.stripe_subscription_id == subscription_id
+            ).first()
+            
+            if existing_sub:
+                existing_sub.is_active = False
+                existing_sub.canceled_at = datetime.utcnow()
+                existing_sub.updated_at = datetime.utcnow()
+                
+                # ユーザーのプレミアム状態も解除
+                user = db.query(User).filter(User.user_key == existing_sub.user_key).first()
+                if user:
+                    user.is_premium = False
+                
+                db.commit()
+                print(f"Cancelled subscription {subscription_id}")
         
         return {"status": "success"}
     
@@ -128,25 +165,18 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=400, detail="Webhook processing failed")
 
 def is_user_premium(user_key: str) -> bool:
-    """ユーザーが有料プランかどうかを確認"""
-    subscription = user_subscriptions.get(user_key, {})
-    return subscription.get("status") == "active"
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=int(os.environ.get("PORT", 8000))
-    )
+    """互換性のための関数 - 実際はサービス層を使用"""
+    # この関数は旧コードとの互換性のため残しているが、
+    # 実際はSubscriptionServiceを使用することが推奨
+    return False  # プレースホルダー
 
 USAGE_LIMIT = 20
 
+# 旧コードとの互換性のため（実際はデータベースで管理）
 usage_store = {}
 
 def get_user_key(request: Request, response: Response):
-    ip = request.client.host
-
+    """ユーザー識別キーを生成または取得"""
     user_id = request.cookies.get("uid")
     if not user_id:
         user_id = str(uuid.uuid4())
@@ -158,53 +188,32 @@ def get_user_key(request: Request, response: Response):
             samesite="lax"
         )
     
-    today = date.today().isoformat()
-    return f"{today}:{ip}:{user_id}"
+    # データベース統合版ではユーザーIDのみを使用
+    return user_id
 
-def check_usage_limit(user_key: str):
-    # 有料ユーザーは制限なし
-    if is_user_premium(user_key):
-        return
-    
-    count = usage_store.get(user_key, 0)
-    print(f"Debug: Current count for {user_key}: {count}, Limit: {USAGE_LIMIT}")
-    if count >= USAGE_LIMIT:
+def check_usage_limit(user_key: str, db: Session):
+    """利用制限をチェック（データベース統合版）"""
+    usage_info = UserService.check_and_update_usage(db, user_key, USAGE_LIMIT)
+    if not usage_info["can_use"]:
         raise HTTPException(
             status_code=429,
             detail="本日の無料利用回数を超えました"
         )
-    usage_store[user_key] = count + 1
-    print(f"Debug: Updated count for {user_key}: {usage_store[user_key]}")
 
-def get_usage_info(user_key: str):
-    # 有料ユーザーの場合
-    if is_user_premium(user_key):
-        return {
-            "used": 0,
-            "remaining": -1,  # -1 = 無制限を示す
-            "limit": -1,
-            "premium": True
-        }
-    
-    # 無料ユーザーの場合
-    count = usage_store.get(user_key, 0)
-    remaining = max(0, USAGE_LIMIT - count)
-    return {
-        "used": count,
-        "remaining": remaining,
-        "limit": USAGE_LIMIT,
-        "premium": False
-    }
+def get_usage_info(user_key: str, db: Session):
+    """利用回数情報を取得（データベース統合版）"""
+    return UserService.get_usage_info(db, user_key, USAGE_LIMIT)
 
 
 # =========================
 # HTML
 # =========================
 @app.post("/api/create-checkout-session")
-def create_checkout_session(request: Request):
+def create_checkout_session(request: Request, response: Response):
+    """Stripe チェックアウトセッション作成"""
     try:
-        # ユーザー識別のため（将来的にサブスクリプション管理で使用）
-        user_key = request.cookies.get("uid", str(uuid.uuid4()))
+        # ユーザー識別
+        user_key = get_user_key(request, response)
         
         session = stripe.checkout.Session.create(
             payment_method_types=["card"],
@@ -238,13 +247,34 @@ def create_checkout_session(request: Request):
         return JSONResponse({"error": "予期しないエラーが発生しました"}, status_code=500)
 
 @app.get("/success", response_class=HTMLResponse)
-def success(request: Request, session_id: str = None):
+def success(request: Request, response: Response, session_id: str = None, db: Session = Depends(get_db)):
     """決済完了ページ"""
+    user_key = get_user_key(request, response)
+    
     if session_id:
         try:
             # セッション情報を取得して確認
             session = stripe.checkout.Session.retrieve(session_id)
             if session.payment_status == "paid":
+                # 決済完了時に確実にプレミアム状態を設定
+                subscription_id = session.get('subscription')
+                customer_id = session.get('customer')
+                
+                # データベースにサブスクリプションを作成
+                SubscriptionService.create_subscription(
+                    db=db,
+                    user_key=user_key,
+                    stripe_customer_id=customer_id,
+                    stripe_subscription_id=subscription_id,
+                    stripe_session_id=session_id,
+                    metadata_dict={
+                        "plan": "premium",
+                        "payment_status": session.payment_status,
+                        "amount_total": session.get('amount_total')
+                    }
+                )
+                print(f"Premium activated for user: {user_key}")
+                
                 return """
                 <html>
                 <head><title>決済完了</title></head>
@@ -297,40 +327,105 @@ def index(request: Request):
     )
 
 @app.get("/api/usage")
-def get_usage(request: Request, response: Response):
+def get_usage(request: Request, response: Response, db: Session = Depends(get_db)):
+    """利用回数情報を取得"""
     user_key = get_user_key(request, response)
-    usage_info = get_usage_info(user_key)
-    print(f"Debug: User key: {user_key}, Usage info: {usage_info}")  # デバッグ用
+    usage_info = get_usage_info(user_key, db)
+    print(f"Debug: User key: {user_key}, Usage info: {usage_info}")
     return usage_info
 
 @app.get("/api/debug/usage")
-def debug_usage():
-    """デバッグ用：全ユーザーの利用状況を表示"""
+def debug_usage(db: Session = Depends(get_db)):
+    """デバッグ用：全ユーザーの利用状況を表示（データベース統合版）"""
     if not DEBUG_MODE:
         raise HTTPException(status_code=404, detail="Not found")
+    
+    # データベースから全ユーザー情報を取得
+    users = db.query(User).all()
+    subscriptions = db.query(Subscription).filter(Subscription.is_active == True).all()
+    
+    user_data = {}
+    for user in users:
+        user_data[user.user_key] = {
+            "daily_usage": user.daily_usage_count,
+            "usage_date": user.daily_usage_date,
+            "is_premium": user.is_premium,
+            "created_at": user.created_at.isoformat() if user.created_at else None
+        }
+    
+    subscription_data = {}
+    for sub in subscriptions:
+        subscription_data[sub.user_key] = {
+            "subscription_id": sub.stripe_subscription_id,
+            "is_active": sub.is_active,
+            "created_at": sub.created_at.isoformat() if sub.created_at else None
+        }
+    
     return {
-        "usage_store": dict(usage_store),
-        "subscriptions": dict(user_subscriptions),
+        "users": user_data,
+        "active_subscriptions": subscription_data,
         "limit": USAGE_LIMIT
     }
 
+@app.get("/api/debug/user-status")
+def debug_user_status(request: Request, response: Response, db: Session = Depends(get_db)):
+    """デバッグ用：現在のユーザーの状態を詳細表示"""
+    if not DEBUG_MODE:
+        raise HTTPException(status_code=404, detail="Not found")
+    
+    user_key = get_user_key(request, response)
+    user = UserService.get_or_create_user(db, user_key)
+    is_premium = SubscriptionService.is_user_premium(db, user_key)
+    active_sub = SubscriptionService.get_active_subscription(db, user_key)
+    usage_info = UserService.get_usage_info(db, user_key, USAGE_LIMIT)
+    
+    return {
+        "user_key": user_key,
+        "user_id": user.id,
+        "is_premium_db": user.is_premium,
+        "is_premium_service": is_premium,
+        "daily_usage_count": user.daily_usage_count,
+        "daily_usage_date": user.daily_usage_date,
+        "usage_info": usage_info,
+        "active_subscription": {
+            "id": active_sub.id if active_sub else None,
+            "stripe_subscription_id": active_sub.stripe_subscription_id if active_sub else None,
+            "is_active": active_sub.is_active if active_sub else None,
+            "created_at": active_sub.created_at.isoformat() if active_sub and active_sub.created_at else None
+        } if active_sub else None
+    }
+
 @app.post("/api/debug/reset")
-def reset_usage(request: Request, response: Response):
+def reset_usage(request: Request, response: Response, db: Session = Depends(get_db)):
     """デバッグ用：現在のユーザーの利用回数をリセット"""
     if not DEBUG_MODE:
         raise HTTPException(status_code=404, detail="Not found")
+    
     user_key = get_user_key(request, response)
-    if user_key in usage_store:
-        del usage_store[user_key]
-    return {"message": f"Usage reset for user: {user_key}"}
+    user = db.query(User).filter(User.user_key == user_key).first()
+    
+    if user:
+        user.daily_usage_count = 0
+        user.daily_usage_date = date.today().isoformat()
+        db.commit()
+        return {"message": f"Usage reset for user: {user_key}"}
+    else:
+        return {"message": f"User not found: {user_key}"}
 
 @app.post("/api/debug/clear-all")
-def clear_all_usage():
+def clear_all_usage(db: Session = Depends(get_db)):
     """デバッグ用：全ユーザーの利用回数をクリア"""
     if not DEBUG_MODE:
         raise HTTPException(status_code=404, detail="Not found")
-    usage_store.clear()
-    return {"message": "All usage data cleared"}
+    
+    # 全ユーザーの利用回数をリセット
+    users = db.query(User).all()
+    for user in users:
+        user.daily_usage_count = 0
+        user.daily_usage_date = date.today().isoformat()
+    
+    db.commit()
+    return {"message": f"Usage cleared for {len(users)} users"}
 
 # =========================
 # Request Model
@@ -515,10 +610,11 @@ def process_line(line, line_no, mode, active_style, width, global_start_pos=0):
 def check_punctuation(
     req: CheckRequest,
     request: Request,
-    response: Response
+    response: Response,
+    db: Session = Depends(get_db)
 ):
     user_key = get_user_key(request, response)
-    check_usage_limit(user_key)
+    check_usage_limit(user_key, db)
 
     # ---- validation ----
     if not req.text.strip():
@@ -606,3 +702,230 @@ def check_punctuation(
             "total_changes": len(all_changes)
         }
     }
+# =========================
+# サブスクリプション管理 API
+# =========================
+@app.get("/api/subscription/status")
+def get_subscription_status(request: Request, response: Response, db: Session = Depends(get_db)):
+    """ユーザーのサブスクリプション状況を取得"""
+    user_key = get_user_key(request, response)
+    
+    is_premium = SubscriptionService.is_user_premium(db, user_key)
+    subscription = SubscriptionService.get_active_subscription(db, user_key)
+    
+    if subscription:
+        return {
+            "is_premium": is_premium,
+            "subscription_id": subscription.stripe_subscription_id,
+            "customer_id": subscription.stripe_customer_id,
+            "created_at": subscription.created_at.isoformat() if subscription.created_at else None,
+            "metadata": json.loads(subscription.meta_data) if subscription.meta_data else {}
+        }
+    else:
+        return {
+            "is_premium": False,
+            "subscription_id": None,
+            "customer_id": None,
+            "created_at": None,
+            "metadata": {}
+        }
+
+@app.post("/api/subscription/cancel")
+def cancel_subscription(request: Request, response: Response, db: Session = Depends(get_db)):
+    """サブスクリプションをキャンセル"""
+    user_key = get_user_key(request, response)
+    
+    # まずアクティブなサブスクリプションを取得
+    subscription = SubscriptionService.get_active_subscription(db, user_key)
+    
+    if not subscription:
+        return {"message": "アクティブなサブスクリプションが見つかりません", "success": False}
+    
+    stripe_error_message = None
+    
+    # Stripe側でキャンセル処理を実行
+    if subscription.stripe_subscription_id:
+        try:
+            # Stripe APIを使ってサブスクリプションを即座にキャンセル
+            canceled_subscription = stripe.Subscription.cancel(subscription.stripe_subscription_id)
+            print(f"Stripe subscription immediately canceled: {subscription.stripe_subscription_id}")
+            print(f"Canceled at: {canceled_subscription.canceled_at}")
+            
+        except stripe.error.StripeError as e:
+            print(f"Stripe cancellation error: {str(e)}")
+            stripe_error_message = str(e)
+            # Stripe側でエラーが発生した場合、データベースの処理は行わない
+            return {
+                "message": f"Stripe側での解約処理でエラーが発生しました: {stripe_error_message}", 
+                "success": False
+            }
+    
+    # Stripe側で成功した場合のみ、データベースでサブスクリプションをキャンセル
+    db_success = SubscriptionService.cancel_subscription(db, user_key)
+    
+    if db_success:
+        return {"message": "サブスクリプションを即座にキャンセルしました。無料プランに戻りました。", "success": True}
+    else:
+        return {"message": "データベース側の解約処理でエラーが発生しました", "success": False}
+
+@app.post("/api/subscription/cancel-immediately")
+def cancel_subscription_immediately(request: Request, response: Response, db: Session = Depends(get_db)):
+    """サブスクリプションを即座にキャンセル（デバッグ用）"""
+    if not DEBUG_MODE:
+        raise HTTPException(status_code=404, detail="Not found")
+    
+    user_key = get_user_key(request, response)
+    
+    # アクティブなサブスクリプションを取得
+    subscription = SubscriptionService.get_active_subscription(db, user_key)
+    
+    if not subscription:
+        return {"message": "アクティブなサブスクリプションが見つかりません", "success": False}
+    
+    # Stripe側で即座にキャンセル
+    if subscription.stripe_subscription_id:
+        try:
+            canceled_subscription = stripe.Subscription.cancel(subscription.stripe_subscription_id)
+            print(f"Stripe subscription immediately canceled: {subscription.stripe_subscription_id}")
+            
+        except stripe.error.StripeError as e:
+            print(f"Stripe immediate cancellation error: {str(e)}")
+            return {
+                "message": f"Stripe側での即座解約処理でエラーが発生しました: {str(e)}", 
+                "success": False
+            }
+    
+    # データベースでサブスクリプションをキャンセル
+    db_success = SubscriptionService.cancel_subscription(db, user_key)
+    
+    if db_success:
+        return {"message": "サブスクリプションを即座にキャンセルしました", "success": True}
+    else:
+        return {"message": "データベース側の解約処理でエラーが発生しました", "success": False}
+
+@app.get("/api/debug/stripe-subscription/{user_key}")
+def debug_stripe_subscription(user_key: str, db: Session = Depends(get_db)):
+    """デバッグ用：StripeサブスクリプションのAPIから直接情報を取得"""
+    if not DEBUG_MODE:
+        raise HTTPException(status_code=404, detail="Not found")
+    
+    subscription = SubscriptionService.get_active_subscription(db, user_key)
+    
+    if not subscription or not subscription.stripe_subscription_id:
+        return {"message": "アクティブなサブスクリプションが見つかりません"}
+    
+    try:
+        # Stripe APIから直接サブスクリプション情報を取得
+        stripe_subscription = stripe.Subscription.retrieve(subscription.stripe_subscription_id)
+        
+        return {
+            "database_subscription": {
+                "id": subscription.id,
+                "stripe_subscription_id": subscription.stripe_subscription_id,
+                "is_active": subscription.is_active,
+                "created_at": subscription.created_at.isoformat() if subscription.created_at else None,
+                "canceled_at": subscription.canceled_at.isoformat() if subscription.canceled_at else None
+            },
+            "stripe_subscription": {
+                "id": stripe_subscription.id,
+                "status": stripe_subscription.status,
+                "cancel_at_period_end": stripe_subscription.cancel_at_period_end,
+                "canceled_at": stripe_subscription.canceled_at,
+                "current_period_start": stripe_subscription.current_period_start,
+                "current_period_end": stripe_subscription.current_period_end,
+                "created": stripe_subscription.created
+            }
+        }
+        
+    except stripe.error.StripeError as e:
+        return {"error": f"Stripe API エラー: {str(e)}"}
+
+# =========================
+# 管理者用 API（デバッグモード時のみ）
+# =========================
+@app.get("/api/admin/users")
+def get_all_users(db: Session = Depends(get_db)):
+    """全ユーザー一覧を取得（管理者用）"""
+    if not DEBUG_MODE:
+        raise HTTPException(status_code=404, detail="Not found")
+    
+    users = db.query(User).all()
+    user_list = []
+    
+    for user in users:
+        # ユーザーのサブスクリプション情報も取得
+        active_sub = SubscriptionService.get_active_subscription(db, user.user_key)
+        
+        user_info = {
+            "id": user.id,
+            "user_key": user.user_key,
+            "is_premium": user.is_premium,
+            "daily_usage_count": user.daily_usage_count,
+            "daily_usage_date": user.daily_usage_date,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "last_seen": user.last_seen.isoformat() if user.last_seen else None,
+            "active_subscription": {
+                "id": active_sub.id if active_sub else None,
+                "stripe_subscription_id": active_sub.stripe_subscription_id if active_sub else None,
+                "created_at": active_sub.created_at.isoformat() if active_sub and active_sub.created_at else None
+            } if active_sub else None
+        }
+        user_list.append(user_info)
+    
+    return {"users": user_list, "total": len(user_list)}
+
+@app.get("/api/admin/subscriptions")
+def get_all_subscriptions(db: Session = Depends(get_db)):
+    """全サブスクリプション一覧を取得（管理者用）"""
+    if not DEBUG_MODE:
+        raise HTTPException(status_code=404, detail="Not found")
+    
+    subscriptions = db.query(Subscription).all()
+    sub_list = []
+    
+    for sub in subscriptions:
+        sub_info = {
+            "id": sub.id,
+            "user_key": sub.user_key,
+            "stripe_customer_id": sub.stripe_customer_id,
+            "stripe_subscription_id": sub.stripe_subscription_id,
+            "stripe_session_id": sub.stripe_session_id,
+            "is_active": sub.is_active,
+            "created_at": sub.created_at.isoformat() if sub.created_at else None,
+            "updated_at": sub.updated_at.isoformat() if sub.updated_at else None,
+            "canceled_at": sub.canceled_at.isoformat() if sub.canceled_at else None,
+            "metadata": json.loads(sub.meta_data) if sub.meta_data else {}
+        }
+        sub_list.append(sub_info)
+    
+    return {"subscriptions": sub_list, "total": len(sub_list)}
+
+@app.post("/api/admin/user/{user_key}/premium")
+def toggle_user_premium(user_key: str, db: Session = Depends(get_db)):
+    """ユーザーのプレミアム状態を切り替え（管理者用）"""
+    if not DEBUG_MODE:
+        raise HTTPException(status_code=404, detail="Not found")
+    
+    user = db.query(User).filter(User.user_key == user_key).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user.is_premium = not user.is_premium
+    db.commit()
+    
+    return {
+        "user_key": user_key,
+        "is_premium": user.is_premium,
+        "message": f"ユーザー {user_key} のプレミアム状態を {'有効' if user.is_premium else '無効'} にしました"
+    }
+
+# =========================
+# アプリケーション起動
+# =========================
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 8000))
+    )

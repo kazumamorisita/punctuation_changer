@@ -3,3 +3,6 @@ uvicorn
 jinja2
 stripe
 python-dotenv
+sqlalchemy
+alembic
+python-multipart

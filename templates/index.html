@@ -805,6 +805,50 @@ button.secondary {
   margin: 6px 0;
 }
 
+/* ===== サブスクリプション管理モーダル ===== */
+.subscription-status {
+  background: #f8f9fa;
+  padding: 15px;
+  border-radius: 6px;
+  margin: 15px 0;
+}
+
+.subscription-status p {
+  margin: 8px 0;
+}
+
+.subscription-warning {
+  background: #fff3cd;
+  border: 1px solid #ffeaa7;
+  padding: 15px;
+  border-radius: 6px;
+  margin: 15px 0;
+  color: #856404;
+}
+
+button.danger {
+  background: #dc3545;
+  color: white;
+}
+
+button.danger:hover {
+  background: #c82333;
+}
+
+/* ===== 利用回数カウンター内の管理ボタン ===== */
+.usage-counter .manage-subscription {
+  display: none;
+  font-size: 11px;
+  color: #28a745;
+  text-decoration: underline;
+  cursor: pointer;
+  margin-top: 4px;
+}
+
+.usage-counter.premium .manage-subscription {
+  display: block;
+}
+
 @keyframes pulse {
   0% { opacity: 1; }
   50% { opacity: 0.7; }
@@ -829,6 +873,7 @@ button.secondary {
   <!-- 利用回数表示 -->
   <div id="usageCounter" class="usage-counter">
     <span id="usageText">読み込み中...</span>
+    <div class="manage-subscription" onclick="openSubscriptionModal()">管理</div>
   </div>
   
   <!-- 左画面：メインコンテンツ -->
@@ -942,6 +987,45 @@ button.secondary {
   </div>
 </div>
 
+<!-- ===== サブスクリプション管理モーダル ===== -->
+<div class="modal" id="subscriptionModal">
+  <div class="modal-content">
+    <h2>サブスクリプション管理</h2>
+
+    <div id="subscriptionInfo">
+      <div class="subscription-status">
+        <p><strong>現在のプラン:</strong> <span id="currentPlan">読み込み中...</span></p>
+        <p><strong>登録日:</strong> <span id="subscriptionDate">-</span></p>
+        <p><strong>状態:</strong> <span id="subscriptionStatus">-</span></p>
+      </div>
+      
+      <div class="subscription-warning" style="display: none;" id="cancelWarning">
+        <p>⚠️ サブスクリプションを解約すると、即座に有料機能をご利用いただけなくなります。</p>
+        <p>解約後は無料プランに戻り、1日20回の利用制限が適用されます。</p>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="secondary" onclick="closeSubscriptionModal()">閉じる</button>
+      <button class="danger" id="cancelButton" onclick="showCancelConfirm()" style="display: none;">解約する</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 解約確認モーダル ===== -->
+<div class="modal" id="cancelConfirmModal">
+  <div class="modal-content">
+    <h2>解約の確認</h2>
+    <p>本当にサブスクリプションを解約しますか？</p>
+    <p>この操作は取り消すことができません。</p>
+
+    <div class="modal-footer">
+      <button class="secondary" onclick="closeCancelConfirm()">キャンセル</button>
+      <button class="danger" onclick="confirmCancel()">解約を実行</button>
+    </div>
+  </div>
+</div>
+
 
 <script>
 const modal = document.getElementById("modal");
@@ -975,6 +1059,7 @@ async function updateUsageCounter() {
       if (data.premium || data.remaining === -1) {
         usageText.textContent = "無制限";
         usageCounter.classList.remove("low", "empty");
+        usageCounter.classList.add("premium");
         usageCounter.style.background = "linear-gradient(135deg, #28a745 0%, #20c997 100%)";
       } else {
         // 無料ユーザーの場合
@@ -982,7 +1067,7 @@ async function updateUsageCounter() {
         usageText.textContent = `残り${remaining}回`;
         
         // 残り回数に応じてスタイルを変更
-        usageCounter.classList.remove("low", "empty");
+        usageCounter.classList.remove("low", "empty", "premium");
         if (remaining <= 0) {
           usageCounter.classList.add("empty");
         } else if (remaining <= 5) {
@@ -1617,6 +1702,86 @@ async function copyResultText() {
     setTimeout(() => {
       copyButtonElement.textContent = originalText;
     }, 2000);
+  }
+}
+
+// ===== サブスクリプション管理機能 =====
+const subscriptionModal = document.getElementById("subscriptionModal");
+const cancelConfirmModal = document.getElementById("cancelConfirmModal");
+
+async function openSubscriptionModal() {
+  subscriptionModal.style.display = "flex";
+  await loadSubscriptionInfo();
+}
+
+function closeSubscriptionModal() {
+  subscriptionModal.style.display = "none";
+}
+
+async function loadSubscriptionInfo() {
+  try {
+    const response = await fetch("/api/subscription/status");
+    if (response.ok) {
+      const data = await response.json();
+      
+      document.getElementById("currentPlan").textContent = data.is_premium ? "有料プラン" : "無料プラン";
+      document.getElementById("subscriptionDate").textContent = data.created_at ? 
+        new Date(data.created_at).toLocaleDateString('ja-JP') : "-";
+      document.getElementById("subscriptionStatus").textContent = data.is_premium ? "アクティブ" : "なし";
+      
+      // 解約ボタンの表示制御
+      const cancelButton = document.getElementById("cancelButton");
+      if (data.is_premium) {
+        cancelButton.style.display = "inline-block";
+      } else {
+        cancelButton.style.display = "none";
+      }
+    } else {
+      console.error("Failed to load subscription info");
+      document.getElementById("currentPlan").textContent = "読み込みエラー";
+    }
+  } catch (error) {
+    console.error("Error loading subscription info:", error);
+    document.getElementById("currentPlan").textContent = "読み込みエラー";
+  }
+}
+
+function showCancelConfirm() {
+  document.getElementById("cancelWarning").style.display = "block";
+  cancelConfirmModal.style.display = "flex";
+}
+
+function closeCancelConfirm() {
+  cancelConfirmModal.style.display = "none";
+  document.getElementById("cancelWarning").style.display = "none";
+}
+
+async function confirmCancel() {
+  try {
+    const response = await fetch("/api/subscription/cancel", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      }
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      alert(data.message);
+      
+      if (data.success) {
+        // 解約成功時の処理
+        closeCancelConfirm();
+        closeSubscriptionModal();
+        updateUsageCounter(); // 利用回数表示を更新
+      }
+    } else {
+      const errorData = await response.json();
+      alert("解約処理でエラーが発生しました: " + errorData.message);
+    }
+  } catch (error) {
+    console.error("Error canceling subscription:", error);
+    alert("解約処理でエラーが発生しました");
   }
 }
 </script>
