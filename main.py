@@ -16,6 +16,7 @@ from datetime import datetime
 import json
 import hashlib
 import hmac
+from typing import Optional
 
 # 環境変数の読み込み
 load_dotenv()
@@ -111,6 +112,14 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
                 customer_id = session.get('customer')
                 session_id = session['id']
                 
+                # セッション作成時のリクエスト情報を保存（可能な場合）
+                metadata = {
+                    "plan": "premium",
+                    "payment_status": session.get('payment_status'),
+                    "amount_total": session.get('amount_total'),
+                    "session_id": session_id
+                }
+                
                 # データベースにサブスクリプション情報を記録
                 subscription = SubscriptionService.create_subscription(
                     db=db,
@@ -118,11 +127,7 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
                     stripe_customer_id=customer_id,
                     stripe_subscription_id=subscription_id,
                     stripe_session_id=session_id,
-                    metadata_dict={
-                        "plan": "premium",
-                        "payment_status": session.get('payment_status'),
-                        "amount_total": session.get('amount_total')
-                    }
+                    metadata_dict=metadata
                 )
                 
                 # 確実にプレミアム状態にする
@@ -194,19 +199,105 @@ USAGE_LIMIT = 20
 usage_store = {}
 
 def get_user_key(request: Request, response: Response):
-    """ユーザー識別キーを生成または取得"""
+    """ユーザー識別キーを生成または取得（永続化対応）"""
+    # まずCookieからユーザーIDを取得
     user_id = request.cookies.get("uid")
+    
+    # IPアドレスとUser-Agentの組み合わせでフィンガープリント生成
+    client_ip = request.client.host
+    user_agent = request.headers.get("user-agent", "")
+    fingerprint = hashlib.md5(f"{client_ip}:{user_agent}".encode()).hexdigest()[:16]
+    
     if not user_id:
+        # Cookieがない場合、フィンガープリントベースのユーザーが存在するかチェック
         user_id = str(uuid.uuid4())
+        
+        # 新しいCookieを設定
         response.set_cookie(
             key="uid",
             value=user_id,
-            max_age=60*60*24*365,
+            max_age=60*60*24*365,  # 1年間
             httponly=True,
-            samesite="lax"
+            samesite="lax",
+            secure=True if request.url.scheme == "https" else False
         )
     
-    # データベース統合版ではユーザーIDのみを使用
+    # フィンガープリント情報も保存してユーザー復元に使用
+    response.set_cookie(
+        key="ufp",  # user fingerprint
+        value=fingerprint,
+        max_age=60*60*24*365,
+        httponly=True,
+        samesite="lax",
+        secure=True if request.url.scheme == "https" else False
+    )
+    
+    return user_id
+
+def find_user_by_fingerprint(db: Session, request: Request) -> Optional[str]:
+    """フィンガープリントベースでユーザーを検索"""
+    client_ip = request.client.host
+    user_agent = request.headers.get("user-agent", "")
+    fingerprint = hashlib.md5(f"{client_ip}:{user_agent}".encode()).hexdigest()[:16]
+    
+    # 同じフィンガープリントでアクティブなサブスクリプションを持つユーザーを検索
+    subscription = db.query(Subscription).filter(
+        Subscription.is_active == True,
+        Subscription.meta_data.contains(f'"fingerprint":"{fingerprint}"')
+    ).first()
+    
+    if subscription:
+        print(f"Found existing premium user by fingerprint: {subscription.user_key}")
+        return subscription.user_key
+    
+    return None
+
+def enhanced_get_user_key(request: Request, response: Response, db: Session):
+    """拡張ユーザー識別（サブスクリプション復元対応）"""
+    # 通常のCookieベース識別
+    user_id = request.cookies.get("uid")
+    
+    # Cookieがない場合、フィンガープリントでプレミアムユーザーを検索
+    if not user_id:
+        existing_user = find_user_by_fingerprint(db, request)
+        if existing_user:
+            # プレミアムユーザーが見つかった場合、そのユーザーIDを使用
+            user_id = existing_user
+            response.set_cookie(
+                key="uid",
+                value=user_id,
+                max_age=60*60*24*365,
+                httponly=True,
+                samesite="lax",
+                secure=True if request.url.scheme == "https" else False
+            )
+            print(f"Restored premium user from fingerprint: {user_id}")
+        else:
+            # 新規ユーザー
+            user_id = str(uuid.uuid4())
+            response.set_cookie(
+                key="uid",
+                value=user_id,
+                max_age=60*60*24*365,
+                httponly=True,
+                samesite="lax",
+                secure=True if request.url.scheme == "https" else False
+            )
+    
+    # フィンガープリント情報を保存
+    client_ip = request.client.host
+    user_agent = request.headers.get("user-agent", "")
+    fingerprint = hashlib.md5(f"{client_ip}:{user_agent}".encode()).hexdigest()[:16]
+    
+    response.set_cookie(
+        key="ufp",
+        value=fingerprint,
+        max_age=60*60*24*365,
+        httponly=True,
+        samesite="lax",
+        secure=True if request.url.scheme == "https" else False
+    )
+    
     return user_id
 
 def check_usage_limit(user_key: str, db: Session):
@@ -227,13 +318,19 @@ def get_usage_info(user_key: str, db: Session):
 # HTML
 # =========================
 @app.post("/api/create-checkout-session")
-def create_checkout_session(request: Request, response: Response):
+def create_checkout_session(request: Request, response: Response, db: Session = Depends(get_db)):
     """Stripe チェックアウトセッション作成"""
     try:
-        # ユーザー識別
-        user_key = get_user_key(request, response)
+        # 拡張ユーザー識別を使用
+        user_key = enhanced_get_user_key(request, response, db)
+        
+        # フィンガープリント情報を生成
+        client_ip = request.client.host
+        user_agent = request.headers.get("user-agent", "")
+        fingerprint = hashlib.md5(f"{client_ip}:{user_agent}".encode()).hexdigest()[:16]
         
         print(f"Creating checkout session for user: {user_key}")
+        print(f"User fingerprint: {fingerprint}")
         print(f"BASE_URL: {BASE_URL}")
         print(f"Stripe API Key configured: {bool(stripe.api_key)}")
         
@@ -257,7 +354,10 @@ def create_checkout_session(request: Request, response: Response):
             client_reference_id=user_key,  # ユーザー識別用
             metadata={
                 "user_key": user_key,
-                "plan": "premium"
+                "plan": "premium",
+                "fingerprint": fingerprint,
+                "ip": client_ip,
+                "user_agent": user_agent[:100]  # 長すぎる場合は切り詰め
             }
         )
         
@@ -282,7 +382,7 @@ def create_checkout_session(request: Request, response: Response):
 @app.get("/success", response_class=HTMLResponse)
 def success(request: Request, response: Response, session_id: str = None, db: Session = Depends(get_db)):
     """決済完了ページ"""
-    user_key = get_user_key(request, response)
+    user_key = enhanced_get_user_key(request, response, db)
     
     if session_id:
         try:
@@ -362,7 +462,7 @@ def index(request: Request):
 @app.get("/api/usage")
 def get_usage(request: Request, response: Response, db: Session = Depends(get_db)):
     """利用回数情報を取得"""
-    user_key = get_user_key(request, response)
+    user_key = enhanced_get_user_key(request, response, db)
     usage_info = get_usage_info(user_key, db)
     print(f"Debug: User key: {user_key}, Usage info: {usage_info}")
     return usage_info
@@ -662,7 +762,7 @@ def check_punctuation(
     response: Response,
     db: Session = Depends(get_db)
 ):
-    user_key = get_user_key(request, response)
+    user_key = enhanced_get_user_key(request, response, db)
     check_usage_limit(user_key, db)
 
     # ---- validation ----
@@ -757,7 +857,7 @@ def check_punctuation(
 @app.get("/api/subscription/status")
 def get_subscription_status(request: Request, response: Response, db: Session = Depends(get_db)):
     """ユーザーのサブスクリプション状況を取得"""
-    user_key = get_user_key(request, response)
+    user_key = enhanced_get_user_key(request, response, db)
     
     is_premium = SubscriptionService.is_user_premium(db, user_key)
     subscription = SubscriptionService.get_active_subscription(db, user_key)
@@ -782,7 +882,7 @@ def get_subscription_status(request: Request, response: Response, db: Session = 
 @app.post("/api/subscription/cancel")
 def cancel_subscription(request: Request, response: Response, db: Session = Depends(get_db)):
     """サブスクリプションをキャンセル"""
-    user_key = get_user_key(request, response)
+    user_key = enhanced_get_user_key(request, response, db)
     
     # まずアクティブなサブスクリプションを取得
     subscription = SubscriptionService.get_active_subscription(db, user_key)
