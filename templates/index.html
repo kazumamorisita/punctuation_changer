@@ -796,6 +796,15 @@ button.secondary {
   animation: pulse 2s infinite;
 }
 
+#upgradeModal ul {
+  padding-left: 20px;
+  margin: 10px 0;
+}
+
+#upgradeModal li {
+  margin: 6px 0;
+}
+
 @keyframes pulse {
   0% { opacity: 1; }
   50% { opacity: 0.7; }
@@ -907,6 +916,31 @@ button.secondary {
   </div>
 </div>
 
+<!-- ===== 制限解除モーダル ===== -->
+<div class="modal" id="upgradeModal">
+  <div class="modal-content">
+    <h2>無料利用回数に達しました</h2>
+
+    <p>
+      本日の無料利用回数（20回）を超えました。<br>
+      有料プランにアップグレードすると、回数制限なくご利用いただけます。
+    </p>
+
+    <div class="option-group">
+      <strong>有料プラン</strong>
+      <ul>
+        <li>✔ 回数無制限</li>
+        <li>✔ 常に全機能利用可能</li>
+        <li>✔ ¥300 / 月（予定）</li>
+      </ul>
+    </div>
+
+    <div class="modal-footer">
+      <button class="secondary" onclick="closeUpgradeModal()">閉じる</button>
+      <button class="primary" onclick="goToPayment()">アップグレード</button>
+    </div>
+  </div>
+</div>
 
 
 <script>
@@ -1149,6 +1183,23 @@ function closeModal() {
   modal.style.display = "none";
 }
 
+// アップグレードモーダル関連の関数
+const upgradeModal = document.getElementById("upgradeModal");
+
+function openUpgradeModal() {
+  upgradeModal.style.display = "flex";
+}
+
+function closeUpgradeModal() {
+  upgradeModal.style.display = "none";
+}
+
+function goToPayment() {
+  alert("決済機能は近日対応予定です！");
+  closeUpgradeModal(); // 決済画面遷移後はモーダルを閉じる
+  // 将来：window.location.href = "/payment";
+}
+
 function submitAction() {
   const selected = document.querySelector('input[name="action"]:checked');
   if (!selected) {
@@ -1175,20 +1226,13 @@ function submitAction() {
       text: inputText.value,
       mode: mode,
       style: style,
-      width: width
+      width: width // selectedWidth → width に統一
     })
   })
   .then(res => {
-    // 429エラー（レート制限）の特別処理
     if (res.status === 429) {
-      resultArea.style.display = "block";
-      resultTitle.textContent = "利用制限";
-      rightScreen.classList.remove("show");
-      resultText.textContent = "⚠️ 本日の無料利用回数を超えました";
-      resultSummary.textContent = "";
-      copyButton.style.display = "none";
-      statisticsArea.style.display = "none";
-      return Promise.reject("rate_limit"); // 特別なリジェクトでchainを停止
+      openUpgradeModal();
+      throw new Error("limit");
     }
     
     // その他のエラーレスポンスの処理
@@ -1282,33 +1326,18 @@ function submitAction() {
     // 利用回数を更新
     updateUsageCounter();
   })
-  .catch((error) => {
-    // レート制限エラーの場合は何も処理しない（既に処理済み）
-    if (error === "rate_limit") {
-      // レート制限エラーでも利用回数を更新（使用済みになったので）
-      updateUsageCounter();
-      return;
-    }
-    
+  .catch(err => {
+    if (err.message === "limit") return;
+
     resultArea.style.display = "block";
     resultTitle.textContent = "エラー";
-    
-    // 右画面を非表示
     rightScreen.classList.remove("show");
-    
-    // エラーメッセージを表示
-    if (error.message) {
-      resultText.textContent = `⚠️ ${error.message}`;
-    } else {
-      resultText.textContent = "サーバーに接続できませんでした。";
-    }
-    
+    resultText.textContent = "サーバーに接続できませんでした。";
     resultSummary.textContent = "";
-    copyButton.style.display = "none"; // エラー時はコピーボタンを非表示
-    // statsJumpButtonはCSSで非表示に固定されている
+    copyButton.style.display = "none";
     statisticsArea.style.display = "none";
     
-    // エラー時でも利用回数を更新（APIが実行された可能性があるため）
+    // エラー時でも利用回数を更新（API実行された可能性があるため）
     updateUsageCounter();
   });
 }
