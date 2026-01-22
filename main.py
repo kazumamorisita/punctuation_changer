@@ -21,8 +21,27 @@ from typing import Optional
 # 環境変数の読み込み
 load_dotenv()
 
-# データベース初期化
-init_db()
+# データベース初期化（強化版）
+print("=== Database Initialization ===")
+try:
+    init_db()
+    from database import engine
+    db_url = str(engine.url)
+    print(f"Database connected: {db_url.split('@')[0] + '@***' if '@' in db_url else db_url}")
+    print(f"Database type: {'PostgreSQL' if db_url.startswith('postgresql') else 'SQLite'}")
+    
+    # テーブル作成確認
+    from sqlalchemy import inspect
+    inspector = inspect(engine)
+    if hasattr(inspector, 'get_table_names'):
+        tables = inspector.get_table_names()
+        print(f"Existing tables: {tables} (count: {len(tables)})")
+    else:
+        print("Cannot inspect tables")
+        
+except Exception as e:
+    print(f"Database initialization error: {str(e)}")
+print("=== End Database Initialization ===")
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
@@ -718,6 +737,59 @@ def recreate_database():
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+@app.get("/api/debug/force-supabase-init")
+def force_supabase_initialization():
+    """強制的にSupabaseテーブルを作成"""
+    try:
+        import os
+        from database import Base
+        
+        # 現在の環境変数を確認
+        current_db_url = os.environ.get("DATABASE_URL", "not_set")
+        
+        # PostgreSQL接続文字列を強制的に設定（環境変数が読み込まれていない場合）
+        if not current_db_url.startswith("postgresql"):
+            # RenderでSupabase環境変数が設定されている場合の強制読み込み
+            render_db_url = None
+            for key, value in os.environ.items():
+                if "postgresql" in value.lower() and "supabase" in value.lower():
+                    render_db_url = value
+                    break
+            
+            if render_db_url:
+                os.environ["DATABASE_URL"] = render_db_url
+                current_db_url = render_db_url
+        
+        # 新しい接続でエンジンを作成
+        from sqlalchemy import create_engine
+        if current_db_url.startswith("postgresql://"):
+            current_db_url = current_db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+        
+        supabase_engine = create_engine(current_db_url, pool_pre_ping=True)
+        
+        # テーブル作成を強制実行
+        Base.metadata.create_all(bind=supabase_engine)
+        
+        # 作成されたテーブルを確認
+        from sqlalchemy import inspect
+        inspector = inspect(supabase_engine)
+        tables = inspector.get_table_names()
+        
+        return {
+            "success": True,
+            "message": "Supabase tables created successfully",
+            "database_url": current_db_url.split('@')[0] + "@***" if '@' in current_db_url else current_db_url,
+            "created_tables": tables,
+            "table_count": len(tables)
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "database_url": current_db_url.split('@')[0] + "@***" if '@' in current_db_url else current_db_url,
+            "env_vars": {k: v for k, v in os.environ.items() if "DATABASE" in k or "postgres" in k.lower()}
+        }
+
 @app.get("/api/debug/recreate-db-get")
 def recreate_database_get():
     """GET版：データベースを新しいスキーマで再作成（ブラウザからアクセス可能）"""
@@ -732,11 +804,18 @@ def recreate_database_get():
         # 新しいスキーマでテーブルを再作成
         Base.metadata.create_all(bind=engine)
         
+        # テーブル確認
+        from sqlalchemy import inspect
+        inspector = inspect(engine)
+        tables = inspector.get_table_names() if hasattr(inspector, 'get_table_names') else []
+        
         return {
             "success": True, 
             "message": "Database recreated with new schema",
             "database_type": db_type,
-            "database_url": db_url.replace(db_url.split('@')[0].split('//')[1], "***") if '@' in db_url else db_url
+            "database_url": db_url.replace(db_url.split('@')[0].split('//')[1], "***") if '@' in db_url else db_url,
+            "created_tables": tables,
+            "table_count": len(tables)
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
