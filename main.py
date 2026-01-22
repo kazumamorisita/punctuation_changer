@@ -94,6 +94,7 @@ if not BASE_URL.startswith(("http://", "https://")):
 print(f"Application BASE_URL: {BASE_URL}")
 
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+STRIPE_PRICE_ID = os.environ.get("STRIPE_PRICE_ID", "")
 DEBUG_MODE = os.environ.get("DEBUG", "False").lower() == "true"
 
 def verify_webhook_signature(payload: bytes, sig_header: str, webhook_secret: str) -> bool:
@@ -455,10 +456,15 @@ def create_checkout_session(request: Request, response: Response, db: Session = 
         print(f"BASE_URL: {BASE_URL}")
         print(f"Stripe API Key configured: {bool(stripe.api_key)}")
         
-        session = stripe.checkout.Session.create(
-            payment_method_types=["card"],
-            mode="subscription",
-            line_items=[{
+        # 価格IDが設定されている場合は使用、なければ従来の方法
+        if STRIPE_PRICE_ID:
+            line_items = [{
+                "price": STRIPE_PRICE_ID,
+                "quantity": 1,
+            }]
+            print(f"Using Stripe Price ID: {STRIPE_PRICE_ID}")
+        else:
+            line_items = [{
                 "price_data": {
                     "currency": "jpy",
                     "product_data": {
@@ -469,7 +475,13 @@ def create_checkout_session(request: Request, response: Response, db: Session = 
                     "recurring": {"interval": "month"},
                 },
                 "quantity": 1,
-            }],
+            }]
+            print("Using dynamic price_data (fallback)")
+        
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            mode="subscription",
+            line_items=line_items,
             success_url=f"{BASE_URL}/success?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{BASE_URL}/cancel",
             client_reference_id=user_key,  # ユーザー識別用
@@ -616,6 +628,7 @@ def debug_config():
         "is_render": "RENDER" in os.environ,
         "stripe_configured": bool(stripe.api_key),
         "stripe_key_prefix": stripe.api_key[:7] + "..." if stripe.api_key else None,
+        "stripe_price_id": STRIPE_PRICE_ID if STRIPE_PRICE_ID else "Not configured (using dynamic pricing)",
         "webhook_secret_configured": bool(STRIPE_WEBHOOK_SECRET),
         "debug_mode": DEBUG_MODE,
         "all_env_vars": {k: v for k, v in os.environ.items() if k.startswith(('RENDER', 'BASE'))}
