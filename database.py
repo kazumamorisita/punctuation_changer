@@ -1,13 +1,8 @@
-from sqlalchemy import create_engine, Column, String, DateTime, Boolean, Integer, Text
+from sqlalchemy import create_engine, Column, String, DateTime, Boolean, Integer, Text, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 import os
-
-from sqlalchemy import create_engine, Column, String, DateTime, Boolean, Integer, Text
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-from datetime import datetime
 import os
 
 # 強制的に環境変数を最優先で読み込み
@@ -36,20 +31,40 @@ def get_database_url():
 
 DATABASE_URL = get_database_url()
 
-# PostgreSQL用の設定
+# データベース接続の試行とフォールバック
+engine = None
+db_type = "Unknown"
+
+# PostgreSQL接続を試行
 if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres://"):
-    # Render環境でpostgresql://をpostgresql+psycopg2://に変換
-    if DATABASE_URL.startswith("postgresql://"):
-        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
-    engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-    print(f"[DATABASE.PY] Created PostgreSQL engine")
-else:
-    # SQLite用の設定
+    try:
+        # Render環境でpostgresql://をpostgresql+psycopg2://に変換
+        test_url = DATABASE_URL
+        if test_url.startswith("postgresql://"):
+            test_url = test_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+        
+        test_engine = create_engine(test_url, pool_pre_ping=True)
+        # 接続テスト
+        with test_engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        
+        engine = test_engine
+        db_type = "PostgreSQL"
+        print(f"[DATABASE.PY] Successfully connected to PostgreSQL")
+        
+    except Exception as e:
+        print(f"[DATABASE.PY] PostgreSQL connection failed: {e}")
+        print(f"[DATABASE.PY] Falling back to SQLite...")
+        DATABASE_URL = "sqlite:///./punctuation_checker.db"
+
+# SQLite接続（初期設定またはフォールバック）
+if engine is None:
     engine = create_engine(
         DATABASE_URL, 
         connect_args={"check_same_thread": False}
     )
-    print(f"[DATABASE.PY] Created SQLite engine")
+    db_type = "SQLite"
+    print(f"[DATABASE.PY] Using SQLite database")
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
@@ -112,7 +127,30 @@ def create_tables():
 
 # データベース初期化（main.pyとの互換性のため）
 def init_db():
-    create_tables()
+    print("=== Database Initialization ===")
+    print(f"Raw DATABASE_URL from env: {os.environ.get('DATABASE_URL')}")
+    
+    # PostgreSQL環境変数を確認
+    postgres_vars = {k: v for k, v in os.environ.items() if "postgres" in v.lower() or "DATABASE" in k.upper()}
+    print(f"PostgreSQL-related environment variables: {postgres_vars}")
+    
+    try:
+        print(f"Database connected: {DATABASE_URL}")
+        print(f"Database type: {db_type}")
+        
+        # テーブル作成
+        create_tables()
+        
+        # 既存テーブル確認
+        from sqlalchemy import inspect
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        print(f"Existing tables: {tables} (count: {len(tables)})")
+        
+    except Exception as e:
+        print(f"Database initialization error: {e}")
+        
+    print("=== End Database Initialization ===")
 
 # データベースセッション取得
 def get_db():
