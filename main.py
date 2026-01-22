@@ -619,7 +619,11 @@ def get_usage(request: Request, response: Response, db: Session = Depends(get_db
 
 @app.get("/api/debug/config")
 def debug_config():
-    """デバッグ用：環境設定の確認"""
+    """デバッグ用：環境設定の確認（本番環境では無効）"""
+    # 本番環境（Render）では無効化
+    if os.environ.get("RENDER") or not DEBUG_MODE:
+        raise HTTPException(status_code=404, detail="Not found")
+    
     return {
         "base_url": BASE_URL,
         "base_url_env": os.environ.get("BASE_URL"),
@@ -636,8 +640,9 @@ def debug_config():
 
 @app.get("/api/debug/usage")
 def debug_usage(db: Session = Depends(get_db)):
-    """デバッグ用：全ユーザーの利用状況を表示（データベース統合版）"""
-    if not DEBUG_MODE:
+    """デバッグ用：全ユーザーの利用状況を表示（本番環境では無効）"""
+    # 本番環境（Render）では無効化
+    if os.environ.get("RENDER") or not DEBUG_MODE:
         raise HTTPException(status_code=404, detail="Not found")
     
     # データベースから全ユーザー情報を取得
@@ -669,8 +674,9 @@ def debug_usage(db: Session = Depends(get_db)):
 
 @app.get("/api/debug/user-status")
 def debug_user_status(request: Request, response: Response, db: Session = Depends(get_db)):
-    """デバッグ用：現在のユーザーの状態を詳細表示"""
-    if not DEBUG_MODE:
+    """デバッグ用：現在のユーザーの状態を詳細表示（本番環境では無効）"""
+    # 本番環境（Render）では無効化
+    if os.environ.get("RENDER") or not DEBUG_MODE:
         raise HTTPException(status_code=404, detail="Not found")
     
     user_key = enhanced_get_user_key(request, response, db)
@@ -726,8 +732,9 @@ def debug_user_status(request: Request, response: Response, db: Session = Depend
 
 @app.post("/api/debug/reset")
 def reset_usage(request: Request, response: Response, db: Session = Depends(get_db)):
-    """デバッグ用：現在のユーザーの利用回数をリセット"""
-    if not DEBUG_MODE:
+    """デバッグ用：現在のユーザーの利用回数をリセット（本番環境では無効）"""
+    # 本番環境（Render）では無効化
+    if os.environ.get("RENDER") or not DEBUG_MODE:
         raise HTTPException(status_code=404, detail="Not found")
     
     user_key = get_user_key(request, response)
@@ -743,8 +750,9 @@ def reset_usage(request: Request, response: Response, db: Session = Depends(get_
 
 @app.post("/api/debug/clear-all")
 def clear_all_usage(db: Session = Depends(get_db)):
-    """デバッグ用：全ユーザーの利用回数をクリア"""
-    if not DEBUG_MODE:
+    """デバッグ用：全ユーザーの利用回数をクリア（本番環境では無効）"""
+    # 本番環境（Render）では無効化
+    if os.environ.get("RENDER") or not DEBUG_MODE:
         raise HTTPException(status_code=404, detail="Not found")
     
     # 全ユーザーの利用回数をリセット
