@@ -470,35 +470,49 @@ button.secondary {
 }
 
 .diff-tooltip {
-  position: absolute;
+  position: fixed; /* absoluteからfixedに変更 */
   background: rgba(0, 0, 0, 0.9);
   color: white;
   padding: 8px 12px;
   border-radius: 6px;
   font-size: 12px;
   white-space: nowrap;
-  z-index: 1000;
+  z-index: 10000; /* z-indexを高くして他の要素の上に表示 */
   opacity: 0;
   visibility: hidden;
   transition: all 0.2s ease;
-  bottom: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  margin-bottom: 5px;
+  pointer-events: none; /* マウスイベントを透過 */
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  /* 動的に位置を設定するため、bottom, left, transformは削除 */
 }
 
 .diff-tooltip::after {
   content: '';
   position: absolute;
-  top: 100%;
-  left: 50%;
   border: 6px solid transparent;
-  border-top-color: rgba(0, 0, 0, 0.9);
+  left: var(--arrow-left, 50%);
   transform: translateX(-50%);
 }
 
-.diff-changed:hover .diff-tooltip {
+/* 下向き矢印（ツールチップが上にある場合） */
+.diff-tooltip {
+  --arrow-direction: down;
+}
+
+.diff-tooltip::after {
+  border-top-color: rgba(0, 0, 0, 0.9);
+  top: 100%;
+}
+
+/* 上向き矢印（ツールチップが下にある場合） */
+.diff-tooltip[style*="--arrow-direction: up"]::after {
+  border-bottom-color: rgba(0, 0, 0, 0.9);
+  border-top-color: transparent;
+  bottom: 100%;
+  top: auto;
+}
+
+.diff-changed.tooltip-visible .diff-tooltip {
   opacity: 1;
   visibility: visible;
 }
@@ -1805,6 +1819,69 @@ async function confirmCancel() {
     alert("解約処理でエラーが発生しました");
   }
 }
+
+// ツールチップの位置制御
+function initTooltips() {
+  document.addEventListener('mouseover', function(e) {
+    if (e.target.classList.contains('diff-changed')) {
+      const tooltip = e.target.querySelector('.diff-tooltip');
+      if (tooltip) {
+        e.target.classList.add('tooltip-visible');
+        positionTooltip(e.target, tooltip);
+      }
+    }
+  });
+  
+  document.addEventListener('mouseout', function(e) {
+    if (e.target.classList.contains('diff-changed')) {
+      e.target.classList.remove('tooltip-visible');
+    }
+  });
+}
+
+function positionTooltip(element, tooltip) {
+  const rect = element.getBoundingClientRect();
+  const tooltipRect = tooltip.getBoundingClientRect();
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  
+  // 基本位置（要素の上中央）
+  let left = rect.left + rect.width / 2 - tooltipRect.width / 2;
+  let top = rect.top - tooltipRect.height - 10; // 10pxのマージン
+  
+  // 左端で見切れる場合
+  if (left < 10) {
+    left = 10;
+  }
+  
+  // 右端で見切れる場合
+  if (left + tooltipRect.width > viewportWidth - 10) {
+    left = viewportWidth - tooltipRect.width - 10;
+  }
+  
+  // 上端で見切れる場合（要素の下に表示）
+  if (top < 10) {
+    top = rect.bottom + 10;
+    // 矢印の向きも変更
+    const arrow = tooltip.querySelector('::after');
+    tooltip.style.setProperty('--arrow-direction', 'up');
+  } else {
+    tooltip.style.setProperty('--arrow-direction', 'down');
+  }
+  
+  // 位置を設定
+  tooltip.style.left = left + 'px';
+  tooltip.style.top = top + 'px';
+  
+  // 矢印の位置も調整
+  const arrowLeft = rect.left + rect.width / 2 - left - 6; // 矢印の幅の半分
+  tooltip.style.setProperty('--arrow-left', arrowLeft + 'px');
+}
+
+// 初期化
+document.addEventListener('DOMContentLoaded', function() {
+  initTooltips();
+});
 </script>
 
 </body>
