@@ -43,8 +43,21 @@ if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres
         if test_url.startswith("postgresql://"):
             test_url = test_url.replace("postgresql://", "postgresql+psycopg2://", 1)
         
-        test_engine = create_engine(test_url, pool_pre_ping=True)
-        # 接続テスト
+        # IPv4接続を強制し、接続パラメータを最適化
+        test_engine = create_engine(
+            test_url, 
+            pool_pre_ping=True,
+            pool_timeout=30,
+            pool_recycle=300,
+            connect_args={
+                "connect_timeout": 10,
+                "application_name": "punctuation_checker_render",
+                # IPv4を優先する設定
+                "target_session_attrs": "read-write"
+            }
+        )
+        
+        # 接続テスト（タイムアウト付き）
         with test_engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         
