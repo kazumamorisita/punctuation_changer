@@ -911,6 +911,51 @@ def search_by_fingerprint(fingerprint: str, db: Session = Depends(get_db)):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+@app.get("/api/emergency/restore-premium/{user_key}")
+def emergency_restore_premium(user_key: str, db: Session = Depends(get_db)):
+    """緊急用：特定ユーザーのプレミアム状態を復旧"""
+    try:
+        # ユーザーを取得または作成
+        user = db.query(User).filter(User.user_key == user_key).first()
+        if not user:
+            user = UserService.get_or_create_user(db, user_key)
+        
+        # プレミアム状態に設定
+        user.is_premium = True
+        user.daily_usage_count = 0  # 利用回数リセット
+        user.daily_usage_date = date.today().isoformat()
+        
+        # アクティブなサブスクリプションを作成
+        existing_sub = db.query(Subscription).filter(
+            Subscription.user_key == user_key,
+            Subscription.is_active == True
+        ).first()
+        
+        if not existing_sub:
+            subscription = Subscription(
+                user_id=user.id,
+                user_key=user_key,
+                is_active=True,
+                plan_type="premium",
+                meta_data='{"emergency_restore": true}'
+            )
+            db.add(subscription)
+        
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": f"Premium status restored for user {user_key}",
+            "user": {
+                "user_key": user_key,
+                "is_premium": user.is_premium,
+                "daily_usage_count": user.daily_usage_count
+            }
+        }
+    except Exception as e:
+        db.rollback()
+        return {"success": False, "error": str(e)}
+
 @app.post("/api/admin/restore")
 async def restore_database(request: Request, db: Session = Depends(get_db)):
     """バックアップデータからデータベースを復元"""
