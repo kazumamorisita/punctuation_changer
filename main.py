@@ -24,6 +24,23 @@ load_dotenv()
 # データベース初期化（強化版）
 print("=== Database Initialization ===")
 try:
+    # 環境変数の詳細確認
+    import os
+    database_url_env = os.environ.get("DATABASE_URL")
+    print(f"Raw DATABASE_URL from env: {database_url_env}")
+    
+    # .env ファイルの影響をチェック
+    if os.path.exists('.env'):
+        print("Found .env file - may override environment variables")
+        with open('.env', 'r') as f:
+            env_content = f.read()
+            if 'DATABASE_URL' in env_content:
+                print("WARNING: .env file contains DATABASE_URL")
+    
+    # PostgreSQL関連の環境変数を全て確認
+    postgres_vars = {k: v for k, v in os.environ.items() if 'postgres' in k.lower() or 'database' in k.lower()}
+    print(f"PostgreSQL-related environment variables: {postgres_vars}")
+    
     init_db()
     from database import engine
     db_url = str(engine.url)
@@ -41,6 +58,8 @@ try:
         
 except Exception as e:
     print(f"Database initialization error: {str(e)}")
+    import traceback
+    traceback.print_exc()
 print("=== End Database Initialization ===")
 
 app = FastAPI()

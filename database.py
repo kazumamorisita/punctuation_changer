@@ -4,7 +4,37 @@ from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 import os
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./punctuation_checker.db")
+from sqlalchemy import create_engine, Column, String, DateTime, Boolean, Integer, Text
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from datetime import datetime
+import os
+
+# 強制的に環境変数を最優先で読み込み
+def get_database_url():
+    """環境変数からDATABASE_URLを取得（詳細ログ付き）"""
+    # 直接環境変数から取得
+    database_url = os.environ.get("DATABASE_URL")
+    
+    print(f"[DATABASE.PY] Raw DATABASE_URL: {database_url}")
+    
+    # PostgreSQL環境変数を探す
+    if not database_url or not database_url.startswith("postgres"):
+        for key, value in os.environ.items():
+            if "postgres" in value.lower() and "supabase" in value.lower():
+                print(f"[DATABASE.PY] Found PostgreSQL URL in {key}: {value[:20]}...")
+                database_url = value
+                break
+    
+    # デフォルトはSQLite
+    if not database_url:
+        database_url = "sqlite:///./punctuation_checker.db"
+        print(f"[DATABASE.PY] Using default SQLite")
+    
+    print(f"[DATABASE.PY] Final DATABASE_URL type: {'PostgreSQL' if database_url.startswith('postgres') else 'SQLite'}")
+    return database_url
+
+DATABASE_URL = get_database_url()
 
 # PostgreSQL用の設定
 if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres://"):
@@ -12,12 +42,14 @@ if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres
     if DATABASE_URL.startswith("postgresql://"):
         DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
     engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+    print(f"[DATABASE.PY] Created PostgreSQL engine")
 else:
     # SQLite用の設定
     engine = create_engine(
         DATABASE_URL, 
         connect_args={"check_same_thread": False}
     )
+    print(f"[DATABASE.PY] Created SQLite engine")
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
