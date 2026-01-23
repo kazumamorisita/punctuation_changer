@@ -297,15 +297,14 @@ def find_user_by_fingerprint(db: Session, request: Request) -> Optional[str]:
         fingerprint = create_fingerprint(request)
         print(f"Searching for user with fingerprint: {fingerprint}")
         
-        # まず、Userテーブルから直接検索（プレミアムユーザーのみ）
-        premium_user = db.query(User).filter(
-            User.browser_fingerprint == fingerprint,
-            User.is_premium == True
+        # まず、Userテーブルから検索（全ユーザー対象）
+        user = db.query(User).filter(
+            User.browser_fingerprint == fingerprint
         ).first()
         
-        if premium_user:
-            print(f"Found premium user in User table: {premium_user.user_key}")
-            return premium_user.user_key
+        if user:
+            print(f"Found user in User table: {user.user_key} (premium: {user.is_premium})")
+            return user.user_key
         
         # 次に、アクティブなサブスクリプションから検索
         subscription = db.query(Subscription).filter(
@@ -314,10 +313,10 @@ def find_user_by_fingerprint(db: Session, request: Request) -> Optional[str]:
         ).first()
         
         if subscription:
-            print(f"Found premium user in Subscription table: {subscription.user_key}")
+            print(f"Found user in Subscription table: {subscription.user_key}")
             return subscription.user_key
         
-        print("No premium user found with this fingerprint")
+        print("No user found with this fingerprint")
     except Exception as e:
         print(f"Warning: Fingerprint lookup failed (old schema?): {str(e)}")
         # 古いスキーマの場合はNoneを返す
